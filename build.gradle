@@ -1,0 +1,23 @@
+plugins {
+  id 'groovy'
+  id 'java'
+}
+
+repositories {
+  maven {
+    // Gradle 8+ requires assignment syntax; use uri() helper
+    url = uri("https://repo.jenkins-ci.org/releases/")
+  }
+  mavenCentral()
+}
+
+dependencies {
+  testImplementation 'org.codehaus.groovy:groovy-all:3.0.21'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation('com.lesfurets:jenkins-pipeline-unit:1.26') {
+    exclude group: 'org.codehaus.groovy'
+  }
+  // testImplementation 'org.spockframework:spock-core:2.3-groovy-3.0'
+}
+
+test { useJUnit() }

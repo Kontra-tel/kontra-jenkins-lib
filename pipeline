@@ -1,0 +1,14 @@
+pipeline {
+  agent any
+  stages {
+    stage('Test library') {
+      steps { sh './gradlew --no-daemon clean test' }
+    }
+    stage('Archive reports') {
+      steps {
+        junit 'build/test-results/test/*.xml'
+        archiveArtifacts 'build/reports/tests/test/**'
+      }
+    }
+  }
+}
