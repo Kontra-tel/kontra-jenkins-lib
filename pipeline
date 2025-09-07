@@ -2,7 +2,7 @@ pipeline {
   agent any
   stages {
     stage('Test library') {
-      steps { sh './gradlew --no-daemon clean test' }
+      steps { sh 'gradle --no-daemon clean test' }
     }
     stage('Archive reports') {
       steps {
