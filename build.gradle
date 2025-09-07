@@ -21,3 +21,21 @@ dependencies {
 }
 
 test { useJUnit() }
+
+// Our tests live in non-standard folder 'test/groovy' instead of 'src/test/groovy'.
+// Tell Gradle where to find them so it produces JUnit XML for Jenkins.
+sourceSets {
+  test {
+    groovy.srcDirs = ['test/groovy']
+    resources.srcDirs = []
+  }
+}
+
+tasks.test {
+  // Ensure all *Test.groovy classes are included
+  include '**/*Test.class'
+  testLogging {
+    events 'passed','failed','skipped'
+    exceptionFormat 'short'
+  }
+}
