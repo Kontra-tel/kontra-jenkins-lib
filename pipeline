@@ -4,7 +4,7 @@ pipeline {
 
     tools {
         jdk   'temurin-21'      // must match Jenkins Tools
-        maven 'Gradle 9.1.0-rc-2'    // must match Jenkins Tools
+        gradle 'Gradle 9.1.0-rc-2'    // must match Jenkins Tools
     }
 
   options { timestamps() }
