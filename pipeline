@@ -1,8 +1,27 @@
 pipeline {
-  agent any
+    
+    agent any
+
+    tools {
+        jdk   'temurin-21'      // must match Jenkins Tools
+        maven 'Maven-3.9.11'    // must match Jenkins Tools
+    }
+
+  options { timestamps() }
   stages {
     stage('Test library') {
-      steps { sh 'gradle --no-daemon clean test' }
+      steps {
+        sh '''
+          set -e
+          if [ -x ./gradlew ]; then
+            echo "Using Gradle wrapper";
+            ./gradlew --no-daemon clean test
+          else
+            echo "Wrapper missing. Falling back to system gradle (ensure it's installed).";
+            gradle --no-daemon clean test
+          fi
+        '''
+      }
     }
     stage('Archive reports') {
       steps {
@@ -11,4 +30,5 @@ pipeline {
       }
     }
   }
+  post { always { echo 'Pipeline completed.' } }
 }
