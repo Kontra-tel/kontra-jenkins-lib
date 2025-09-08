@@ -154,7 +154,11 @@ private void pushTag(String tag, String credentialsId, String ownerHint) {
 
   String token = resolveGithubToken(credentialsId, ownerHint ?: or.owner)
   if (!token) {
-    sh "git push origin ${tag}"
+    int rc = sh(script: "git push origin ${tag}", returnStatus: true)
+    if (rc != 0) {
+      echo "release: push failed (status=${rc}) without token. Ensure Jenkins has push rights (deploy key with write or credentials with PAT repo scope)."
+      error "release: git push failed (no token)"
+    }
     return
   }
 
@@ -162,10 +166,14 @@ private void pushTag(String tag, String credentialsId, String ownerHint) {
   sh 'chmod 700 git-askpass.sh'
   def ask = "${pwd()}/git-askpass.sh"
   withEnv(["GIT_ASKPASS=${ask}", "GITHUB_TOKEN=${token}"]) {
-    sh """
-       git remote set-url origin https://x-access-token@${httpsRepo.replaceFirst(/^https:\\/\\//,'')}
+    int rc = sh(script: """
+       git remote set-url origin https://x-access-token@${httpsRepo.replaceFirst(/^https:\/\//,'')}
        git push origin ${tag}
-    """
+    """.stripIndent(), returnStatus: true)
+    if (rc != 0) {
+      echo "release: push failed (status=${rc}) with token (possibly insufficient permissions). Credential='${credentialsId}'. Token must have repo:write or GitHub App must have Contents: read & write installed on repo ${or.owner}/${or.repo}."
+      error "release: git push failed"
+    }
   }
 }
 
