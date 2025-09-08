@@ -1,6 +1,4 @@
 // vars/generateChangelog.groovy
-import org.jenkinsci.plugins.workflow.cps.NonCPS
-
 def call(Map cfg = [:]) {
     def outputFile  = cfg.outputFile ?: 'CHANGELOG.md'
     def appendTo    = cfg.copyTo     ?: null
@@ -8,70 +6,64 @@ def call(Map cfg = [:]) {
     def title       = cfg.title      ?: '# Changelog'
     def version     = cfg.version    ?: (env.BUILD_VERSION ?: 'Unversioned')
 
-    // ---- Extract commit entries BEFORE any pipeline steps run
+    // Extract commit entries FIRST (NonCPS), so no GitChangeSet objects remain in scope
     List<Map> commitEntries = extractCommitEntries(currentBuild?.changeSets)
     if (!commitEntries || commitEntries.isEmpty()) {
         echo 'No change entries detected (no commit diffs in this build)'
         return null
     }
 
-    // ---- Now it's safe to call steps (no GitChangeSetList in scope)
+    // Safe to use steps now
     if (!fileExists(outputFile) || (env.COMMIT_MESSAGE ?: '').contains(resetToken)) {
         writeFile file: outputFile, text: "${title}\n"
     }
 
-    // Resolve repo URL
-    def repoUrl = env.GIT_URL
-    if (!repoUrl?.trim()) {
+    def repoUrl = env.GIT_URL?.trim()
+    if (!repoUrl) {
         repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
     }
-    if (repoUrl?.endsWith('.git')) {
-        repoUrl = repoUrl[0..-5]
-    }
+    if (repoUrl?.endsWith('.git')) repoUrl = repoUrl[0..-5]
 
     def timestamp = new Date().format('yyyy-MM-dd HH:mm', TimeZone.getTimeZone('UTC'))
     def changes = "## ${version} (${timestamp} UTC)\n"
     def authors = [] as Set
 
     commitEntries.each { e ->
-        def summary    = e.summary
-        def hash       = e.hash
-        def shortHash  = hash.take(7)
-        def commitLink = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${hash})]" : "[${shortHash}]"
-        changes += "- ${summary} ${commitLink}\n"
+        def shortHash  = (e.hash ?: '').take(7)
+        def link = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${e.hash})]" : "[${shortHash}]"
+        changes += "- ${e.summary ?: ''} ${link}\n"
         if (e.author) authors << e.author
     }
 
     changes += '\n### Authors:\n'
     authors.each { a -> changes += "- ${a}\n" }
 
-    // Idempotency: skip if this version block already exists
-    def existing = readFile(file: outputFile)
+    def existing = fileExists(outputFile) ? readFile(file: outputFile) : ''
     if (existing.contains("## ${version} (")) {
         echo "Changelog: version ${version} section already present, skipping append"
         return outputFile
     }
 
     echo changes
-    sh "printf '%s\n' \"${changes}\" >> '${outputFile}'"
+    sh "printf '%s\\n' \"${changes}\" >> '${outputFile}'"
 
     if (appendTo) {
         sh "cat '${outputFile}' > '${appendTo}'"
     }
-
     return outputFile
 }
 
-@NonCPS
+@org.jenkinsci.plugins.workflow.cps.NonCPS
 private List<Map> extractCommitEntries(def changeSets) {
     def out = []
     if (changeSets) {
         for (def cs : changeSets) {
-            if (!cs?.items) continue
-            for (def entry : cs.items) {
+            def items = cs?.items
+            if (!items) continue
+            for (def entry : items) {
                 def firstLine = (entry?.msg ?: '').readLines()?.first()?.trim()
                 out << [
-                    summary: firstLine,
+                    summary: firstLine ?: '',
                     hash   : entry?.commitId ?: '',
                     author : entry?.author?.fullName ?: ''
                 ]
