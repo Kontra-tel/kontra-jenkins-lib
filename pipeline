@@ -60,7 +60,7 @@ pipeline {
           }
           if (!branch || branch == 'HEAD') {
             branch = sh(
-              script: "git ls-remote --symref origin HEAD | awk '/^ref:/ {sub(\"refs/heads/\", \"\", $2); print $2; exit}'",
+              script: 'git ls-remote --symref origin HEAD | awk \'/^ref:/ {sub("refs/heads/", "", $2); print $2; exit}\' || true',
               returnStdout: true
             ).trim()
           }
