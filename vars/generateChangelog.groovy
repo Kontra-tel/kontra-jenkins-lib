@@ -1,74 +1,79 @@
 // vars/generateChangelog.groovy
 def call(Map cfg = [:]) {
-    def outputFile  = cfg.outputFile ?: 'CHANGELOG.md'
-    def appendTo    = cfg.copyTo     ?: null
-    def resetToken  = cfg.resetToken ?: '!resetLog'
-    def title       = cfg.title      ?: '# Changelog'
-    def version     = cfg.version    ?: (env.BUILD_VERSION ?: 'Unversioned')
+    String outputFile = (cfg.outputFile ?: 'CHANGELOG.md') as String
+    String appendTo   = (cfg.copyTo ?: null) as String
+    String resetToken = (cfg.resetToken ?: '!resetLog') as String
+    String title      = (cfg.title ?: '# Changelog') as String
+    String version    = (cfg.version ?: (env.BUILD_VERSION ?: 'Unversioned')) as String
 
-    // Extract commit entries FIRST (NonCPS), so no GitChangeSet objects remain in scope
-    List<Map> commitEntries = extractCommitEntries(currentBuild?.changeSets)
-    if (!commitEntries || commitEntries.isEmpty()) {
+    // ---- Copy commit data into plain Maps WITHOUT closures (no @NonCPS needed)
+    List<Map> commitEntries = []
+    def csList = currentBuild?.changeSets
+    if (csList) {
+        for (def cs : csList) {
+            def items = cs?.items
+            if (items) {
+                for (def entry : items) {
+                    String msgFirstLine = ((entry?.msg ?: '') as String).readLines().with { it ? it[0].trim() : '' }
+                    commitEntries.add([
+                        summary: msgFirstLine,
+                        hash   : (entry?.commitId ?: '') as String,
+                        author : (entry?.author?.fullName ?: '') as String
+                    ])
+                }
+            }
+        }
+    }
+
+    if (commitEntries.isEmpty()) {
         echo 'No change entries detected (no commit diffs in this build)'
         return null
     }
 
-    // Safe to use steps now
+    // ---- Now it is safe to call pipeline steps
     if (!fileExists(outputFile) || (env.COMMIT_MESSAGE ?: '').contains(resetToken)) {
         writeFile file: outputFile, text: "${title}\n"
     }
 
-    def repoUrl = env.GIT_URL?.trim()
+    // Resolve repo URL once
+    String repoUrl = env.GIT_URL?.trim()
     if (!repoUrl) {
         repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
     }
     if (repoUrl?.endsWith('.git')) repoUrl = repoUrl[0..-5]
 
-    def timestamp = new Date().format('yyyy-MM-dd HH:mm', TimeZone.getTimeZone('UTC'))
-    def changes = "## ${version} (${timestamp} UTC)\n"
-    def authors = [] as Set
+    String timestamp = new Date().format('yyyy-MM-dd HH:mm', TimeZone.getTimeZone('UTC'))
+    StringBuilder changes = new StringBuilder()
+    changes.append("## ").append(version).append(" (").append(timestamp).append(" UTC)\n")
 
-    commitEntries.each { e ->
-        def shortHash  = (e.hash ?: '').take(7)
-        def link = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${e.hash})]" : "[${shortHash}]"
-        changes += "- ${e.summary ?: ''} ${link}\n"
-        if (e.author) authors << e.author
+    // Collect authors with stable order
+    LinkedHashSet<String> authors = new LinkedHashSet<>()
+    for (Map e : commitEntries) {
+        String hash = e.hash ?: ''
+        String shortHash = hash.length() >= 7 ? hash.substring(0,7) : hash
+        String link = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${hash})]" : "[${shortHash}]"
+        changes.append("- ").append(e.summary ?: '').append(' ').append(link).append('\n')
+        if (e.author) authors.add(e.author)
     }
 
-    changes += '\n### Authors:\n'
-    authors.each { a -> changes += "- ${a}\n" }
+    changes.append('\n### Authors:\n')
+    for (String a : authors) {
+        changes.append("- ").append(a).append('\n')
+    }
 
-    def existing = fileExists(outputFile) ? readFile(file: outputFile) : ''
+    // Idempotency: skip if same version block already exists
+    String existing = readFile(file: outputFile)
     if (existing.contains("## ${version} (")) {
         echo "Changelog: version ${version} section already present, skipping append"
         return outputFile
     }
 
-    echo changes
+    echo changes.toString()
     sh "printf '%s\\n' \"${changes}\" >> '${outputFile}'"
 
     if (appendTo) {
         sh "cat '${outputFile}' > '${appendTo}'"
     }
-    return outputFile
-}
 
-@org.jenkinsci.plugins.workflow.cps.NonCPS
-private List<Map> extractCommitEntries(def changeSets) {
-    def out = []
-    if (changeSets) {
-        for (def cs : changeSets) {
-            def items = cs?.items
-            if (!items) continue
-            for (def entry : items) {
-                def firstLine = (entry?.msg ?: '').readLines()?.first()?.trim()
-                out << [
-                    summary: firstLine ?: '',
-                    hash   : entry?.commitId ?: '',
-                    author : entry?.author?.fullName ?: ''
-                ]
-            }
-        }
-    }
-    return out
+    return outputFile
 }
