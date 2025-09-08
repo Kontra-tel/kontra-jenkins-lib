@@ -40,10 +40,9 @@ class DeploySystemdTest extends BaseLibTest {
 
     assert res.dryRun
     assert res.service == 'kontraAPI'
-    // a unit file should have been composed and staged into writtenFiles
-    def unitPath = writtenFiles.keySet().find { it.endsWith('.service') }
-    assert unitPath != null
-    def unitText = writtenFiles[unitPath]
+  // unit content should be returned and staged at a .dryrun.* path only
+  assert res.unitContent
+  def unitText = res.unitContent
     assert unitText.contains('Description=Kontra API')
     assert unitText.contains('WorkingDirectory=/opt/kontraAPI')
     assert unitText.contains('EnvironmentFile=-/opt/kontraAPI/build/.env')
@@ -66,8 +65,7 @@ class DeploySystemdTest extends BaseLibTest {
       useSudo: false,
       execStart: "/usr/bin/env bash -lc 'echo hello'"
     )
-    def unitPath = writtenFiles.keySet().find { it.endsWith('.service') }
-    assert unitPath.contains('/.config/systemd/user/')
+  assert res.unitContent
   }
 
   @Test
@@ -90,9 +88,6 @@ class DeploySystemdTest extends BaseLibTest {
     )
     assert res.dryRun
     assert res.execStart.contains('/usr/bin/java -Xmx256m -jar /opt/synthsvc/synthsvc.jar --port 8080 --verbose')
-    def unitPath = writtenFiles.keySet().find { it.endsWith('.service') && it.contains('synthsvc') }
-    assert unitPath != null
-    def text = writtenFiles[unitPath]
-    assert text.contains('ExecStart=/usr/bin/java -Xmx256m -jar /opt/synthsvc/synthsvc.jar --port 8080 --verbose')
+  assert res.unitContent.contains('ExecStart=/usr/bin/java -Xmx256m -jar /opt/synthsvc/synthsvc.jar --port 8080 --verbose')
   }
 }

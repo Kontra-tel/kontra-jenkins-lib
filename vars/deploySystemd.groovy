@@ -59,6 +59,7 @@ def call(Map cfg = [:]) {
 
     // Optionally (re)install the unit
     boolean wroteUnit = false
+    String unitContent = null
     if (installUnit) {
         // Only check existence if not dryRun (since file may not actually exist)
         def exists = false
@@ -88,9 +89,8 @@ def call(Map cfg = [:]) {
                 WantedBy=multi-user.target
             """.stripIndent()
             if (dryRun) {
-                // For tests: stage the final path directly
-                writeFile file: unitPath, text: unit
-                echo "deploySystemd(dryRun): would write unit -> ${unitPath}"
+                unitContent = unit
+                echo "deploySystemd(dryRun): would write unit -> ${unitPath} (no file created)"
             } else {
                 def tmp = ".tmp.${service}.service"
                 writeFile file: tmp, text: unit
@@ -102,6 +102,7 @@ def call(Map cfg = [:]) {
                 }
                 sh "rm -f '${tmp}'"
                 echo "deploySystemd: wrote unit -> ${unitPath}"
+                unitContent = unit
             }
             wroteUnit = true
         } else {
@@ -129,12 +130,13 @@ def call(Map cfg = [:]) {
     }
 
     return [
-        dryRun      : dryRun,
-        service     : service,
-        unitPath    : unitPath,
-        unitWritten : wroteUnit,
-        deployedJar : deployedJar,
-        execStart   : execStart,
-        restarted   : !dryRun
+        dryRun       : dryRun,
+        service      : service,
+        unitPath     : unitPath,
+        unitWritten  : wroteUnit,
+        unitContent  : unitContent,
+        deployedJar  : deployedJar,
+        execStart    : execStart,
+        restarted    : !dryRun
     ]
 }
