@@ -91,7 +91,9 @@ def call(Map cfg = [:]) {
     boolean cumulativePatch = (cfg.cumulativePatch == true)
     if (cumulativePatch && strategy == 'tag' && bump == 'patch' && !usedForcedBump && !commitMsg.contains(majorToken) && !commitMsg.contains(minorToken)) {
         try {
-            commitsSinceTag = sh(script: "git rev-list --count $(git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || echo v0.0.0)..HEAD", returnStdout: true).trim() as int
+            // Avoid Groovy interpreting $() inside GString: break into two commands
+            def lastTag = sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || echo v0.0.0", returnStdout: true).trim()
+            commitsSinceTag = sh(script: "git rev-list --count ${lastTag}..HEAD", returnStdout: true).trim() as int
         } catch (ignored) { commitsSinceTag = 0 }
         if (commitsSinceTag > 0) {
             p = origPatch + commitsSinceTag
@@ -128,8 +130,8 @@ def call(Map cfg = [:]) {
         isRelease     : isRelease,
         commitMessage : commitMsg,
         forcedBump    : usedForcedBump ? forcedBump : null,
-    forcedRelease : forcedRelease,
-    commitsSinceTag: commitsSinceTag,
-    cumulativePatch: cumulativePatch
+        forcedRelease : forcedRelease,
+        commitsSinceTag: commitsSinceTag,
+        cumulativePatch: cumulativePatch
     ]
 }
