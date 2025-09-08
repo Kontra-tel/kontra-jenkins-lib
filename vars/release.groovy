@@ -34,6 +34,7 @@ def call(Map cfg = [:]) {
   final String  ownerHint          = (cfg.owner ?: null) as String
   final String  gitUserName        = (cfg.gitUserName ?: 'Jenkins CI') as String
   final String  gitUserEmail       = (cfg.gitUserEmail ?: 'jenkins@local') as String
+  final boolean debug              = (cfg.debug == true)
 
   final boolean createGithubRelease= (cfg.createGithubRelease == true)
   final boolean releaseDraft       = (cfg.releaseDraft == true)
@@ -153,6 +154,10 @@ private void pushTag(String tag, String credentialsId, String ownerHint) {
       .replaceFirst(/^https:\/\/[^@]+@github\.com\//, 'https://github.com/')
 
   String token = resolveGithubToken(credentialsId, ownerHint ?: or.owner)
+  boolean debug = (binding.hasVariable('params') && (params.DEBUG_RELEASE?.toString() == 'true')) || (binding.hasVariable('DEBUG_RELEASE') && binding.DEBUG_RELEASE == 'true')
+  if (debug) {
+    echo "release: pushTag origin=${httpsRepo} hasToken=${token ? 'yes' : 'no'} credentialsId=${credentialsId ?: 'none'}"
+  }
   if (!token) {
     int rc = sh(script: "git push origin ${tag}", returnStatus: true)
     if (rc != 0) {
@@ -166,9 +171,13 @@ private void pushTag(String tag, String credentialsId, String ownerHint) {
   sh 'chmod 700 git-askpass.sh'
   def ask = "${pwd()}/git-askpass.sh"
   withEnv(["GIT_ASKPASS=${ask}", "GITHUB_TOKEN=${token}"]) {
+    // Pre-flight permission check (HEAD request on repo)
+    if (debug) {
+      sh script: "curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ${token}' https://api.github.com/repos/${or.owner}/${or.repo}", returnStdout: true
+    }
     int rc = sh(script: """
        git remote set-url origin https://x-access-token@${httpsRepo.replaceFirst(/^https:\/\//,'')}
-       git push origin ${tag}
+       GIT_CURL_VERBOSE=1 git push origin ${tag}
     """.stripIndent(), returnStatus: true)
     if (rc != 0) {
       echo "release: push failed (status=${rc}) with token (possibly insufficient permissions). Credential='${credentialsId}'. Token must have repo:write or GitHub App must have Contents: read & write installed on repo ${or.owner}/${or.repo}."

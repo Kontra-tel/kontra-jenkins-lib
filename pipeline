@@ -36,6 +36,7 @@ pipeline {
     booleanParam(name: 'GH_GENERATE_NOTES',    defaultValue: true,  description: 'Auto-generate release notes')
     string      (name: 'GH_OWNER',             defaultValue: 'Kontra-tel', description: 'GitHub org/user (helps GitHub App token inference)')
     string      (name: 'GH_CREDENTIALS_ID',    defaultValue: 'Jenkins-Kontra', description: 'CredentialsId (GitHub App or PAT) for pushing tags/releases')
+  booleanParam(name: 'DEBUG_RELEASE',        defaultValue: false, description: 'Verbose diagnostics for release push/token')
   string      (name: 'GIT_USER_NAME',        defaultValue: 'Jenkins CI', description: 'Git user.name for tagging (fallback if repo lacks config)')
   string      (name: 'GIT_USER_EMAIL',       defaultValue: 'jenkins@local', description: 'Git user.email for tagging (fallback)')
   }
@@ -181,6 +182,7 @@ allprojects {
             pushTags           : true,
             gitUserName        : params.GIT_USER_NAME,
             gitUserEmail       : params.GIT_USER_EMAIL,
+            debug              : params.DEBUG_RELEASE,
             // GitHub integration
             credentialsId      : params.GH_CREDENTIALS_ID?.trim(),
             owner              : params.GH_OWNER?.trim(),
