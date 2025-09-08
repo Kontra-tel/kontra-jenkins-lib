@@ -5,7 +5,18 @@ def call(Map cfg = [:]) {
     }
     def dryRun     = (cfg.dryRun == true)
     def path       = cfg.path as String
-    def keys       = (cfg.keys ?: []) as List
+    // Normalize keys: accept List, single String, comma-separated String, or empty
+    def keysInput = cfg.keys
+    List keys
+    if (keysInput instanceof CharSequence) {
+        def s = keysInput.toString().trim()
+        if (s.contains(',')) { keys = s.split(',').collect { it.trim() }.findAll { it } }
+        else if (s) { keys = [s] } else { keys = [] }
+    } else if (keysInput instanceof Collection) {
+        keys = (keysInput as Collection).collect { it?.toString() }.findAll { it }
+    } else {
+        keys = []
+    }
     def data       = (cfg.data ?: [:]) as Map   // optional explicit key→value map (overrides env)
     def header     = cfg.header ?: ({
         def ts = java.time.ZonedDateTime.now(java.time.ZoneId.of('UTC'))
