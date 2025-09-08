@@ -38,7 +38,6 @@ pipeline {
   environment {
     VERSION_FILE   = 'version.txt'
     CHANGELOG_FILE = 'CHANGELOG.md'
-    // If your repo is public, set this empty and we’ll load without creds.
     GIT_READ_CREDS = 'Jenkins-Kontra'
   }
 
@@ -53,11 +52,21 @@ pipeline {
           def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
           def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
-          // Build SCM source; only add credentials if provided.
-          def src = [$class: 'jenkins.plugins.git.GitSCMSource', remote: repoUrl, traits: []]
-          if (env.GIT_READ_CREDS?.trim()) { src.credentialsId = env.GIT_READ_CREDS.trim() }
+          // Optional: assert the branch exists remotely (helps catch typos like main vs master)
+          sh "git ls-remote --heads ${repoUrl} ${branch} && true"
 
-          library(identifier: "kontra-jenkins-lib@${branch}", retriever: modernSCM(src))
+          def scmCfg = [
+            $class: 'GitSCM',
+            branches: [[name: "*/${branch}"]],
+            doGenerateSubmoduleConfigurations: false,
+            extensions: [],
+            userRemoteConfigs: [[url: repoUrl]]
+          ]
+          if (env.GIT_READ_CREDS?.trim()) {
+            scmCfg.userRemoteConfigs[0].credentialsId = env.GIT_READ_CREDS.trim()
+          }
+
+          library(identifier: "kontra-jenkins-lib@${branch}", retriever: legacySCM(scmCfg))
         }
       }
     }
