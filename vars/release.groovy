@@ -18,17 +18,18 @@ def call(Map cfg = [:]) {
   // Required
   String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
-
-  // Config
-  final String  tagPrefix           = (cfg.tagPrefix ?: 'v') as String
-  final boolean alwaysTag           = (cfg.alwaysTag == true)
-  final boolean tagOnRelease        = (cfg.tagOnRelease == false) ? false : true
-  final boolean forceRelease        = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
-  final String  releaseToken        = (cfg.releaseToken ?: '!release') as String
-
-  final boolean onlyTagOnMain       = (cfg.onlyTagOnMain == false) ? false : true
-  final String  mainBranch          = (cfg.releaseBranch ?: 'main') as String
-
+// Lightweight probe without regex (regex caused sandbox PatternSyntax issues under CPS)
+private Map ghProbeRepoAccess(String token, String owner, String repo, String apiBase) {
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json'"
+  String code = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
+  String body = ''
+  if (code == '200') {
+    body = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
+  }
+  // Very naive permission detection – avoids regex: look for '"permissions"' then '"push":true'
+  boolean pushAllowed = (body.contains('"permissions"') && (body.contains('"push":true') || body.contains('"push": true')))
+  return [code: code, push: pushAllowed]
+}
   final boolean pushTags            = (cfg.pushTags == false) ? false : true
   final String  credentialsId       = (cfg.credentialsId ?: null) as String
   final String  ownerHint           = (cfg.owner ?: null) as String
