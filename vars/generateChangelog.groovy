@@ -20,6 +20,22 @@ def call(Map cfg = [:]) {
         writeFile file: outputFile, text: "${title}\n"
     }
 
+    // Extract commit metadata to simple serializable structures to avoid keeping GitChangeSetList (non-serializable) in scope across CPS steps
+    List<Map> commitEntries = []
+    if (hasChanges) {
+        changeSets.each { cs ->
+            cs.items.each { entry ->
+                commitEntries << [
+                    summary: entry.msg?.readLines()?.first()?.trim(),
+                    hash: entry.commitId,
+                    author: entry.author.fullName
+                ]
+            }
+        }
+    }
+    // Drop original changeSets reference to prevent NotSerializableException during pipeline checkpoint
+    changeSets = null
+
     // Resolve repo URL
     def repoUrl = env.GIT_URL
     if (!repoUrl?.trim()) {
@@ -33,15 +49,13 @@ def call(Map cfg = [:]) {
     def changes = "## ${version} (${timestamp} UTC)\n"
     def authors = [] as Set
 
-    changeSets.each { cs ->
-        cs.items.each { entry ->
-            def summary    = entry.msg?.readLines()?.first()?.trim()
-            def hash       = entry.commitId
-            def shortHash  = hash.take(7)
-            def commitLink = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${hash})]" : "[${shortHash}]"
-            changes += "- ${summary} ${commitLink}\n"
-            authors << entry.author.fullName
-        }
+    commitEntries.each { e ->
+        def summary    = e.summary
+        def hash       = e.hash
+        def shortHash  = hash.take(7)
+        def commitLink = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${hash})]" : "[${shortHash}]"
+        changes += "- ${summary} ${commitLink}\n"
+        authors << e.author
     }
 
     changes += '\n### Authors:\n'
