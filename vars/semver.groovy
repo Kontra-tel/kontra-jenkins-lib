@@ -1,70 +1,62 @@
 // vars/semver.groovy
 def call(Map cfg = [:]) {
     // Config
-    def versionFile   = cfg.versionFile   ?: 'version.txt'
-    def majorToken    = cfg.majorToken    ?: '!major'
-    def minorToken    = cfg.minorToken    ?: '!minor'
-    def releaseToken  = cfg.releaseToken  ?: '!release'
-    def strategy      = cfg.strategy      ?: 'tag'   // 'tag' | 'file'
-    def writeFileOut  = (cfg.writeFile    == false) ? false : true
-    def tagOnRelease  = (cfg.tagOnRelease == false) ? false : true
-    def pushTags      = (cfg.pushTags     == false) ? false : true
-    def tagPattern = cfg.tagPattern ?: 'v[0-9]*'     // e.g. 'v[0-9]*' or 'api-v[0-9]*'
-    def tagMode    = (cfg.tagMode ?: 'nearest')      // 'nearest' or 'latest'
+    final String versionFile   = (cfg.versionFile   ?: 'version.txt') as String
+    final String majorToken    = (cfg.majorToken    ?: '!major') as String
+    final String minorToken    = (cfg.minorToken    ?: '!minor') as String
+    final String releaseToken  = (cfg.releaseToken  ?: '!release') as String
+    final String strategy      = (cfg.strategy      ?: 'tag') as String     // 'tag' | 'file'
+    final boolean writeFileOut = (cfg.writeFile     == false) ? false : true
+    final boolean tagOnRelease = (cfg.tagOnRelease  == false) ? false : true
+    final boolean pushTags     = (cfg.pushTags      == false) ? false : true
+    final String tagPattern    = (cfg.tagPattern    ?: 'v[0-9]*') as String
+    final String tagMode       = (cfg.tagMode       ?: 'nearest') as String // 'nearest' | 'latest'
+    final boolean cumulativePatch = (cfg.cumulativePatch == true)
+    final String stateFile     = (cfg.stateFile ?: '.semver-state') as String
+    final String mainBranch    = (cfg.releaseBranch ?: 'main') as String
+    final boolean onlyTagOnMain = (cfg.onlyTagOnMain == false) ? false : true
 
-    // Make sure we have tags for 'tag' strategy
-    if (strategy == 'tag') {
-        sh(label: 'Fetch tags (ignore if shallow)',
-           script: 'git fetch --tags --force || true')
-    }
-
-    // Last commit message (used for bump & release)
-    def commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+    // Commit metadata
+    sh "git fetch --tags --force --prune || true"
+    String commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
     env.COMMIT_MESSAGE = commitMsg
+    String head = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+    String branch = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
 
-    // Ensure we can see remote tags (ok with shallow clones)
-    sh(label: 'Fetch tags', script: "git fetch --tags --force --prune 2>/dev/null || true")
-
-    // Determine current version
-    String current = '0.0.0'
-    if (strategy == 'tag') {
-        String foundTag = ''
-        if (tagMode == 'latest') {
-            // Latest version-looking tag in the repo (version-aware sort)
-            foundTag = sh(
-            script: "git -c versionsort.suffix=- tag -l '${tagPattern}' --sort=-v:refname | head -n1",
-            returnStdout: true
-            ).trim()
-        } else {
-            // Nearest tag reachable from HEAD (what you had)
-            foundTag = sh(
-            script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true",
-            returnStdout: true
-            ).trim()
-        }
-
-        if (!foundTag) foundTag = 'v0.0.0'  // no tags yet
-
-        // Normalize: grab first X.Y.Z, ignore prefix/suffix like 'v' or '-rc.1'
-        def m = (foundTag =~ /(\d+)\.(\d+)\.(\d+)/)
-        current = m.find() ? m.group(0) : '0.0.0'
-    } else {
-        if (fileExists(versionFile)) {
-            current = readFile(versionFile).trim()
-        } else {
-            writeFile file: versionFile, text: current + '\n'
+    // Avoid bumping twice for the same commit (optional but handy)
+    if (fileExists(stateFile)) {
+        String lastSha = readFile(stateFile).trim()
+        if (lastSha == head && cfg.skipOnSameCommit != false) {
+            // Re-use version.txt if present, else the last tag
+            String reuse = fileExists(versionFile) ? readFile(versionFile).trim() : readTagVersion(tagPattern, tagMode)
+            env.BUILD_VERSION = reuse ?: '0.0.0'
+            return [baseVersion: env.BUILD_VERSION, version: env.BUILD_VERSION, bump: 'none',
+                    isRelease: false, commitMessage: commitMsg, skipped: true]
         }
     }
 
-    // Parse & bump
-    def parts = current.tokenize('.')
-    int M = (parts.size() > 0 ? parts[0] as int : 0)
-    int m = (parts.size() > 1 ? parts[1] as int : 0)
-    int p = (parts.size() > 2 ? parts[2] as int : 0)
+    // ---- Determine baseline (hybrid: max(tag, file))
+    String baselineSource = 'tag'
+    String tagVer  = (strategy == 'tag') ? readTagVersion(tagPattern, tagMode) : '0.0.0'
+    String fileVer = fileExists(versionFile) ? readFile(versionFile).trim() : '0.0.0'
+    String current
+    if (strategy == 'file') {
+        current = fileVer
+        baselineSource = 'file'
+    } else {
+        current = maxSemver(tagVer ?: '0.0.0', fileVer ?: '0.0.0')
+        baselineSource = (current == (tagVer ?: '0.0.0')) ? 'tag' : 'file'
+    }
+
+    // ---- Parse & bump
+    List<String> parts = (current ?: '0.0.0').tokenize('.')
+    int M = parts.size() > 0 ? parts[0] as int : 0
+    int m = parts.size() > 1 ? parts[1] as int : 0
+    int p = parts.size() > 2 ? parts[2] as int : 0
     int origPatch = p
 
-    // Forced bump precedence (explicit cfg > env flags > commit message tokens)
-    String forcedBump = (cfg.forceBump ?: '')?.toString().toLowerCase()
+    // Forced bump precedence
+    String forcedBump = (cfg.forceBump ?: '').toString().toLowerCase()
     if (!forcedBump) {
         if (cfg.forceMajor == true || env.FORCE_MAJOR == 'true') forcedBump = 'major'
         else if (cfg.forceMinor == true || env.FORCE_MINOR == 'true') forcedBump = 'minor'
@@ -74,64 +66,89 @@ def call(Map cfg = [:]) {
     String bump = 'patch'
     boolean usedForcedBump = false
     switch (forcedBump) {
-        case 'major':
-            M++; m = 0; p = 0; bump = 'major'; usedForcedBump = true; break
-        case 'minor':
-            m++; p = 0; bump = 'minor'; usedForcedBump = true; break
-        case 'patch':
-            p++; bump = 'patch'; usedForcedBump = true; break
+        case 'major': M++; m = 0; p = 0; bump = 'major'; usedForcedBump = true; break
+        case 'minor': m++; p = 0; bump = 'minor'; usedForcedBump = true; break
+        case 'patch': p++;         bump = 'patch'; usedForcedBump = true; break
         default:
             if (commitMsg.contains(majorToken)) { M++; m = 0; p = 0; bump = 'major' }
             else if (commitMsg.contains(minorToken)) { m++; p = 0; bump = 'minor' }
             else { p++; bump = 'patch' }
     }
 
-    // Optional cumulative patch bump: increment patch by number of commits since last tag instead of just +1
+    // Optional cumulative patch (only if our baseline truly came from a tag)
     int commitsSinceTag = 0
-    boolean cumulativePatch = (cfg.cumulativePatch == true)
-    if (cumulativePatch && strategy == 'tag' && bump == 'patch' && !usedForcedBump && !commitMsg.contains(majorToken) && !commitMsg.contains(minorToken)) {
+    if (cumulativePatch && baselineSource == 'tag' && bump == 'patch' && !usedForcedBump
+        && !commitMsg.contains(majorToken) && !commitMsg.contains(minorToken)) {
         try {
-            // Avoid Groovy interpreting $() inside GString: break into two commands
-            def lastTag = sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || echo v0.0.0", returnStdout: true).trim()
-            commitsSinceTag = sh(script: "git rev-list --count ${lastTag}..HEAD", returnStdout: true).trim() as int
+            String lastTag = readNearestTag(tagPattern)
+            if (lastTag) {
+                commitsSinceTag = sh(script: "git rev-list --count ${lastTag}..HEAD", returnStdout: true).trim() as int
+                if (commitsSinceTag > 0) p = origPatch + commitsSinceTag
+            }
         } catch (ignored) { commitsSinceTag = 0 }
-        if (commitsSinceTag > 0) {
-            p = origPatch + commitsSinceTag
-        }
     }
 
     String version = "${M}.${m}.${p}"
     env.BUILD_VERSION = version
 
-    // Persist to file if desired
-    if (writeFileOut) {
-        writeFile file: versionFile, text: version
-    }
+    // Persist version + state
+    if (writeFileOut) writeFile file: versionFile, text: "${version}\n"
+    writeFile file: stateFile, text: "${head}\n"
 
-    // Tag on release
+    // Tag only on release (and optionally only on main)
     boolean forcedRelease = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
     boolean isRelease = forcedRelease || commitMsg.contains(releaseToken)
-    // If release forced but no explicit bump token or forced bump changed version beyond current? ensure at least patch increments
-    if (isRelease && !usedForcedBump && !commitMsg.contains(majorToken) && !commitMsg.contains(minorToken) && bump == 'patch') {
-        // Already incremented patch in normal path; nothing else needed.
-        // (If future logic skips patch increment, enforce here.)
-    }
-    if (isRelease && tagOnRelease) {
+    boolean canTagHere = !onlyTagOnMain || (branch == mainBranch)
+
+    if (isRelease && tagOnRelease && canTagHere) {
         sh "git tag -a v${version} -m 'Release v${version}'"
-        if (pushTags) {
-            sh "git push origin v${version}"
-        }
+        if (pushTags) sh "git push origin v${version}"
     }
 
     return [
-        baseVersion   : current,
-        version       : version,
-        bump          : bump,
-        isRelease     : isRelease,
-        commitMessage : commitMsg,
-        forcedBump    : usedForcedBump ? forcedBump : null,
-        forcedRelease : forcedRelease,
-        commitsSinceTag: commitsSinceTag,
-        cumulativePatch: cumulativePatch
+        baseVersion     : current,
+        baselineSource  : baselineSource,   // 'tag' or 'file'
+        version         : version,
+        bump            : bump,
+        isRelease       : isRelease,
+        commitMessage   : commitMsg,
+        forcedBump      : usedForcedBump ? forcedBump : null,
+        forcedRelease   : forcedRelease,
+        commitsSinceTag : commitsSinceTag,
+        cumulativePatch : cumulativePatch,
+        branch          : branch
     ]
+}
+
+// ---- helpers (CPS-safe)
+
+private String readTagVersion(String tagPattern, String tagMode) {
+    String t
+    if (tagMode == 'latest') {
+        t = sh(script: "git -c versionsort.suffix=- tag -l '${tagPattern}' --sort=-v:refname | head -n1 || true",
+               returnStdout: true).trim()
+    } else {
+        t = sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true",
+               returnStdout: true).trim()
+    }
+    if (!t) return '0.0.0'
+    def m = (t =~ /(\d+)\.(\d+)\.(\d+)/)
+    return m.find() ? m.group(0) : '0.0.0'
+}
+
+private String readNearestTag(String tagPattern) {
+    String t = sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true",
+                  returnStdout: true).trim()
+    return t ?: ''
+}
+
+private String maxSemver(String a, String b) {
+    List<Integer> A = (a ?: '0.0.0').tokenize('.').collect { it as int }
+    List<Integer> B = (b ?: '0.0.0').tokenize('.').collect { it as int }
+    while (A.size() < 3) A << 0
+    while (B.size() < 3) B << 0
+    for (int i = 0; i < 3; i++) {
+        if (A[i] != B[i]) return (A[i] > B[i]) ? a : b
+    }
+    return a
 }
