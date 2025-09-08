@@ -31,20 +31,20 @@ pipeline {
     stage('Load this repo as a library') {
       steps {
         script {
-          // Resolve repo url/branch for the retriever
-          def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-          def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
+            // Resolve repo url/branch for the retriever
+            def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+            def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
-          // Load the *current commit* as a Shared Library so we can call vars/* right here.
-          library(
-            identifier: "kontra-ci@${branch}",   // the name here is arbitrary in this context
-            retriever: modernSCM([
-              $class: 'GitSCM',
-              userRemoteConfigs: [[url: repoUrl, credentialsId: env.GIT_READ_CREDS]],
-              branches: [[name: "*/${branch}"]],
-              extensions: []   // keep it simple; Jenkins will clone to a tmp dir
-            ])
-          )
+            // Load the *current commit* as a Shared Library so we can call vars/* right here.
+            library(
+                identifier: 'kontra-jenkins-lib@main',
+                retriever: modernSCM([
+                    $class: 'GitSCMSource',
+                    remote: 'https://github.com/kontra-tel/kontra-jenkins-lib.git',
+                    credentialsId: 'jenkins-git-read',
+                    traits: []
+                ])
+            )
         }
       }
     }
