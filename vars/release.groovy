@@ -152,7 +152,8 @@ private void pushTag(String tag, String credentialsId, String ownerHint, String 
 
   String token = resolveGithubToken(credentialsId, ownerHint ?: or.owner)
   if (debug) {
-    echo "release: pushTag origin=${httpsRepo} hasToken=${token ? 'yes' : 'no'} credId=${credentialsId ?: 'none'} repo=${or.owner}/${or.repo}"
+    String tokPrefix = token ? (token.length() >= 4 ? token.substring(0, token.indexOf('_') > 0 ? token.indexOf('_')+1 : Math.min(4, token.length())) : 'tok') : 'none'
+    echo "release: pushTag origin=${httpsRepo} tokenType=${tokPrefix} hasToken=${token ? 'yes' : 'no'} credId=${credentialsId ?: 'none'} repo=${or.owner}/${or.repo}"
   }
 
   if (!token) {
@@ -166,8 +167,17 @@ private void pushTag(String tag, String credentialsId, String ownerHint, String 
   }
 
 
-  // Use token for HTTPS push (GitHub App tokens and PATs):
-  // username must be 'x-access-token' and password is the token.
+  // Optional lightweight permission probe (no regex) to help debug 403s
+  if (debug) {
+    try {
+      String permJson = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${or.owner}/${or.repo}", returnStdout: true).trim()
+      boolean hasPush = permJson.contains('"push": true')
+      boolean hasAdmin = permJson.contains('"admin": true')
+      echo "release: permissions repo=${or.owner}/${or.repo} push=${hasPush} admin=${hasAdmin}"
+    } catch (Throwable ignore) { echo 'release: permission probe failed (ignored)' }
+  }
+
+  // Use token for HTTPS push (GitHub App installation tokens & PATs): username must be 'x-access-token' and password is the token.
   writeFile file: 'git-askpass.sh', text: '#!/bin/sh\necho "$GITHUB_TOKEN"\n'
   sh 'chmod 700 git-askpass.sh'
   def ask = "${pwd()}/git-askpass.sh"
