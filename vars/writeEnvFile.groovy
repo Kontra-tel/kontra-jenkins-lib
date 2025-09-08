@@ -37,8 +37,10 @@ def call(Map cfg = [:]) {
     } else {
         keysToWrite = (data.keySet() as List<String>)
     }
-    if (sortKeys) {
-        keysToWrite = keysToWrite.sort { it }
+    if (sortKeys && keysToWrite) {
+        // Avoid CPS closure sort; use Java sort
+        keysToWrite = new ArrayList<String>(keysToWrite)
+        java.util.Collections.sort(keysToWrite)
     }
 
     def sanitizeKey = { String k ->
