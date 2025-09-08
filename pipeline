@@ -29,20 +29,26 @@ pipeline {
     }
 
     stage('Load this repo as a library') {
-        steps {
-            script {
-                def repoUrl = 'https://github.com/Kontra-tel/kontra-jenkins-lib.git'
-                def branch  = 'main' // or compute as before
+      steps {
+        script {
+            // Resolve repo url/branch for the retriever
+            def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+            def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
-                def src = [
-                $class: 'GitSCMSource',
-                remote: repoUrl,
-                credentialsId: 'Jenkins-Kontra', // works now that Owner is set on the cred
-                traits: []
-                ]
-                library(identifier: "kontra-jenkins-lib@${branch}", retriever: modernSCM(src))
-            }
+            // Load the *current commit* as a Shared Library so we can call vars/* right here.
+            library(
+                identifier: 'kontra-jenkins-lib@main',
+                retriever: modernSCM([
+                    $class: 'GitSCMSource',
+                    apiUri: '',
+                    repoOwner: 'Kontra-tel',
+                    repoName: 'kontra-jenkins-lib',
+                    credentialsId: 'Jenkins-Kontra',
+                    traits: []
+                ])
+            )
         }
+      }
     }
 
     stage('Versioning (vars/semver.groovy)') {
