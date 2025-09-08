@@ -32,6 +32,8 @@ def call(Map cfg = [:]) {
   final boolean pushTags           = (cfg.pushTags == false) ? false : true
   final String  credentialsId      = (cfg.credentialsId ?: null) as String
   final String  ownerHint          = (cfg.owner ?: null) as String
+  final String  gitUserName        = (cfg.gitUserName ?: 'Jenkins CI') as String
+  final String  gitUserEmail       = (cfg.gitUserEmail ?: 'jenkins@local') as String
 
   final boolean createGithubRelease= (cfg.createGithubRelease == true)
   final boolean releaseDraft       = (cfg.releaseDraft == true)
@@ -67,6 +69,16 @@ def call(Map cfg = [:]) {
   boolean ghRel  = false
 
   if (shouldTag) {
+    // Ensure git identity (avoid fatal: unable to auto-detect email)
+    sh """
+      set -eu
+      if ! git config user.email >/dev/null 2>&1 || [ -z "$(git config user.email || true)" ]; then
+        git config user.email '${gitUserEmail}'
+      fi
+      if ! git config user.name  >/dev/null 2>&1 || [ -z "$(git config user.name || true)" ]; then
+        git config user.name '${gitUserName}'
+      fi
+    """
     if (tagAlreadyExists(tag)) {
       echo "release: tag ${tag} already exists; skipping creation"
       tagged = true
