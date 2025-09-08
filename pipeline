@@ -60,17 +60,20 @@ pipeline {
         script {
           // Use library step directly (now available in the Pipeline script):
           def v = semver(
-            strategy: 'tag',
-            versionFile: env.VERSION_FILE,
-            tagOnRelease: true,
-            pushTags: true,
-            forceMajor: params.FORCE_MAJOR,
-            forceMinor: params.FORCE_MINOR,
-            forcePatch: params.FORCE_PATCH,
-            forceRelease: params.FORCE_RELEASE
+            strategy     : 'tag',
+            versionFile  : env.VERSION_FILE,
+            tagOnRelease : true,    // will tag ONLY if commit has !release or forceRelease true
+            pushTags     : true,
+            forceMajor   : params.FORCE_MAJOR,
+            forceMinor   : params.FORCE_MINOR,
+            forcePatch   : params.FORCE_PATCH,
+            forceRelease : params.FORCE_RELEASE,
+            onlyTagOnMain: true
           )
           currentBuild.displayName = "v${v.version}"
           echo "semver: bump=${v.bump}, version=${v.version}, isRelease=${v.isRelease}, forcedBump=${v.forcedBump ?: 'none'}, forcedRelease=${v.forcedRelease}" 
+          sh "git log -1 --oneline || true"
+          sh "git tag -l | tail -n 5 || true"
           writeFile file: env.VERSION_FILE, text: v.version + "\n"
           archiveArtifacts artifacts: env.VERSION_FILE, fingerprint: true
         }
