@@ -11,7 +11,7 @@ pipeline {
 
   options {
     timestamps()
-    ansiColor('xterm')
+    // ansiColor('xterm') not an existing step in some Jenkins installations
     disableConcurrentBuilds()
   }
 
