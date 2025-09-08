@@ -16,7 +16,10 @@ abstract class BaseLibTest extends BasePipelineTest {
     helper.registerAllowedMethod('echo', [String.class], { s -> println "echo> $s" })
     helper.registerAllowedMethod('error', [String.class], { s -> throw new RuntimeException(s) })
     helper.registerAllowedMethod('fileExists', [String.class], { path -> writtenFiles.containsKey(path) || readFiles.containsKey(path) })
-    helper.registerAllowedMethod('readFile', [Map.class], { m -> readFiles[m.file] ?: "" })
+    helper.registerAllowedMethod('readFile', [Map.class], { m ->
+      // Prefer previously written test files if present
+      return readFiles.containsKey(m.file) ? readFiles[m.file] : (writtenFiles[m.file] ?: "")
+    })
     helper.registerAllowedMethod('writeFile', [Map.class], { m -> writtenFiles[m.file] = m.text })
 
     // Two 'sh' overloads used by many steps
