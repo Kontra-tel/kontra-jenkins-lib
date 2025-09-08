@@ -18,7 +18,15 @@ def call(Map cfg = [:]) {
   // Required
   String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
-// Lightweight probe without regex (regex caused sandbox PatternSyntax issues under CPS)
+  // Core config (provide safe defaults for all referenced symbols)
+  final String  tagPrefix          = (cfg.tagPrefix ?: 'v') as String
+  final String  releaseToken       = (cfg.releaseToken ?: '!release') as String
+  final boolean tagOnRelease       = (cfg.tagOnRelease == false) ? false : true
+  final boolean forceRelease       = (cfg.forceRelease == true)
+  final boolean onlyTagOnMain      = (cfg.onlyTagOnMain == false) ? false : true
+  final String  mainBranch         = (cfg.mainBranch ?: 'main') as String
+  final boolean alwaysTag          = (cfg.alwaysTag == true)
+  // Lightweight probe without regex (regex caused sandbox PatternSyntax issues under CPS)
   final boolean pushTags            = (cfg.pushTags == false) ? false : true
   final String  credentialsId       = (cfg.credentialsId ?: null) as String
   final String  ownerHint           = (cfg.owner ?: null) as String
@@ -134,13 +142,6 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
  * Preflight probe: does this token SEE the repo and have push permission?
  * Returns [code: "200"/..., push: true|false]
  */
-private Map ghProbeRepoAccess(String token, String owner, String repo, String apiBase) {
-  String hdrs = "-H \"Authorization: Bearer ${token}\" -H \"Accept: application/vnd.github+json\""
-  String code = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
-  String body = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
-  boolean pushAllowed = (body =~ /\"permissions\"\\s*:\\s*\\{[^}]*\"push\"\\s*:\\s*true/).find()
-  return [code: code, push: pushAllowed]
-}
 
 private void pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
