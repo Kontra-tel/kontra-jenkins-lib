@@ -1,5 +1,5 @@
 // This Pipeline lives in the *library repo* itself.
-// It bootstraps/load this same repo as a Shared Library and invokes vars/* steps.
+// It bootstraps/loads this same repo as a Shared Library and invokes vars/* steps.
 
 pipeline {
   agent any
@@ -11,23 +11,35 @@ pipeline {
 
   options {
     timestamps()
-    // ansiColor('xterm') not an existing option
     disableConcurrentBuilds()
   }
 
   parameters {
-    booleanParam(name: 'FORCE_MAJOR',   defaultValue: false, description: 'Force major version bump (!major)')
-    booleanParam(name: 'FORCE_MINOR',   defaultValue: false, description: 'Force minor version bump (!minor)')
-    booleanParam(name: 'FORCE_PATCH',   defaultValue: false, description: 'Force patch version bump (default)')
-    booleanParam(name: 'FORCE_RELEASE', defaultValue: false, description: 'Force tagging this build as a release (!release)')
+    // Semver controls
+    booleanParam(name: 'FORCE_MAJOR',          defaultValue: false, description: 'Force major version bump (!major)')
+    booleanParam(name: 'FORCE_MINOR',          defaultValue: false, description: 'Force minor version bump (!minor)')
+    booleanParam(name: 'FORCE_PATCH',          defaultValue: false, description: 'Force patch version bump (default)')
+    booleanParam(name: 'FORCE_RELEASE',        defaultValue: false, description: 'Force tagging this build as a release (!release)')
+    booleanParam(name: 'ALWAYS_TAG',           defaultValue: false, description: 'Create a git tag for every bump')
+    booleanParam(name: 'STRICT_TAG_BASELINE',  defaultValue: false, description: 'Ignore version.txt; baseline only from tags')
+    booleanParam(name: 'ONLY_TAG_ON_MAIN',     defaultValue: true,  description: 'Only tag on the main branch')
+    string      (name: 'RELEASE_BRANCH',       defaultValue: 'main', description: 'Branch where tagging is allowed when ONLY_TAG_ON_MAIN=true')
+    booleanParam(name: 'CUMULATIVE_PATCH',     defaultValue: false, description: 'Patch += commits since last tag (when baseline is a tag)')
+
+    // GitHub integration
+    booleanParam(name: 'CREATE_GH_RELEASE',    defaultValue: false, description: 'Create/Update a GitHub Release for tagged versions')
+    booleanParam(name: 'GH_RELEASE_DRAFT',     defaultValue: false, description: 'Create releases as drafts')
+    booleanParam(name: 'GH_RELEASE_PRERELEASE',defaultValue: false, description: 'Mark releases as prerelease')
+    booleanParam(name: 'GH_GENERATE_NOTES',    defaultValue: true,  description: 'Auto-generate release notes')
+    string      (name: 'GH_OWNER',             defaultValue: 'Kontra-tel', description: 'GitHub org/user (helps GitHub App token inference)')
+    string      (name: 'GH_CREDENTIALS_ID',    defaultValue: 'Jenkins-Kontra', description: 'CredentialsId (GitHub App or PAT) for pushing tags/releases')
   }
 
   environment {
-    // optional: where to place generated files for this library repo
-    CHANGELOG_FILE = 'CHANGELOG.md'
     VERSION_FILE   = 'version.txt'
-    // if your repo requires creds to fetch again for library loading, set the ID here:
-    GIT_READ_CREDS = 'Jenkins-Kontra'   // <-- change or remove if anonymous works
+    CHANGELOG_FILE = 'CHANGELOG.md'
+    // If your repo is public, set this empty and we’ll load without creds.
+    GIT_READ_CREDS = 'Jenkins-Kontra'
   }
 
   stages {
@@ -38,19 +50,14 @@ pipeline {
     stage('Load this repo as a library') {
       steps {
         script {
-            // Resolve repo url/branch for the retriever
-            def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-            def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
+          def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+          def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
-            // Load the *current commit* as a Shared Library so we can call vars/* right here.
-            // Generic Git SCM Source (must provide 'remote')
-            def src = [
-            $class: 'jenkins.plugins.git.GitSCMSource',
-            remote: 'https://github.com/Kontra-tel/kontra-jenkins-lib.git',
-            credentialsId: 'Jenkins-Kontra',   // omit if public
-            traits: []
-            ]
-            library(identifier: 'kontra-jenkins-lib@main', retriever: modernSCM(src))
+          // Build SCM source; only add credentials if provided.
+          def src = [$class: 'jenkins.plugins.git.GitSCMSource', remote: repoUrl, traits: []]
+          if (env.GIT_READ_CREDS?.trim()) { src.credentialsId = env.GIT_READ_CREDS.trim() }
+
+          library(identifier: "kontra-jenkins-lib@${branch}", retriever: modernSCM(src))
         }
       }
     }
@@ -58,35 +65,49 @@ pipeline {
     stage('Versioning (vars/semver.groovy)') {
       steps {
         script {
-          // Use library step directly (now available in the Pipeline script):
           def v = semver(
-            strategy     : 'tag',
-            versionFile  : env.VERSION_FILE,
-            tagOnRelease : true,    // will tag ONLY if commit has !release or forceRelease true
-            pushTags     : true,
-            forceMajor   : params.FORCE_MAJOR,
-            forceMinor   : params.FORCE_MINOR,
-            forcePatch   : params.FORCE_PATCH,
-            forceRelease : params.FORCE_RELEASE,
-            onlyTagOnMain: true
+            strategy           : 'tag',                 // or 'file'
+            versionFile        : env.VERSION_FILE,
+            cumulativePatch    : params.CUMULATIVE_PATCH,
+            // bump tokens/forces
+            forceMajor         : params.FORCE_MAJOR,
+            forceMinor         : params.FORCE_MINOR,
+            forcePatch         : params.FORCE_PATCH,
+            forceRelease       : params.FORCE_RELEASE,
+            // tagging behavior
+            alwaysTag          : params.ALWAYS_TAG,
+            strictTagBaseline  : params.STRICT_TAG_BASELINE,
+            tagOnRelease       : true,
+            onlyTagOnMain      : params.ONLY_TAG_ON_MAIN,
+            releaseBranch      : params.RELEASE_BRANCH,
+            pushTags           : true,
+            // GitHub integration
+            credentialsId      : params.GH_CREDENTIALS_ID?.trim(),
+            owner              : params.GH_OWNER?.trim(),
+            createGithubRelease: params.CREATE_GH_RELEASE,
+            releaseDraft       : params.GH_RELEASE_DRAFT,
+            prerelease         : params.GH_RELEASE_PRERELEASE,
+            generateReleaseNotes: params.GH_GENERATE_NOTES
           )
+
           currentBuild.displayName = "v${v.version}"
-          echo "semver: bump=${v.bump}, version=${v.version}, isRelease=${v.isRelease}, forcedBump=${v.forcedBump ?: 'none'}, forcedRelease=${v.forcedRelease}" 
-          sh "git log -1 --oneline || true"
-          sh "git tag -l | tail -n 5 || true"
+          echo "semver → version=${v.version} (base=${v.baseVersion}, src=${v.baselineSource}) bump=${v.bump} release=${v.isRelease} tagPushed=${v.tagPushed} ghReleased=${v.githubReleased}"
+
           writeFile file: env.VERSION_FILE, text: v.version + "\n"
           archiveArtifacts artifacts: env.VERSION_FILE, fingerprint: true
+
+          sh "git log -1 --oneline || true"
+          sh "git tag -l | tail -n 5 || true"
         }
       }
     }
 
     stage('Changelog (vars/generateChangelog.groovy)') {
-      when { expression { currentBuild.changeSets?.size() > 0 } }
       steps {
         script {
           def out = generateChangelog(
             outputFile: env.CHANGELOG_FILE,
-            version: env.BUILD_VERSION  // set by semver
+            version   : env.BUILD_VERSION
           )
           echo "Changelog updated → ${out ?: 'no changes'}"
           archiveArtifacts artifacts: env.CHANGELOG_FILE, fingerprint: true
@@ -97,7 +118,6 @@ pipeline {
     stage('Unit tests (JenkinsPipelineUnit)') {
       steps {
         script {
-          // Ensure Jenkins repo is available, even if build.gradle forgets it
           writeFile file: 'init.gradle', text: '''
 allprojects {
   repositories {
@@ -108,9 +128,13 @@ allprojects {
 '''
           sh '''
             set -eu
-            echo "Running tests with system Gradle (wrapper ignored)"
-            gradle --version
-            gradle --no-daemon --stacktrace --info -I init.gradle clean test
+            if [ -x ./gradlew ]; then
+              echo "Using Gradle wrapper"
+              ./gradlew --no-daemon --stacktrace --info -I init.gradle clean test
+            else
+              echo "Wrapper missing → system Gradle"
+              gradle --no-daemon --stacktrace --info -I init.gradle clean test
+            fi
           '''
         }
       }
@@ -122,7 +146,6 @@ allprojects {
       }
     }
 
-    // Optional: smoke-call other vars in dry-run for extra confidence
     stage('Smoke vars (optional)') {
       when { expression { fileExists('vars/writeEnvFile.groovy') && fileExists('vars/deploySystemd.groovy') } }
       steps {
