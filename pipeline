@@ -20,7 +20,7 @@ pipeline {
     CHANGELOG_FILE = 'CHANGELOG.md'
     VERSION_FILE   = 'version.txt'
     // if your repo requires creds to fetch again for library loading, set the ID here:
-    GIT_READ_CREDS = 'jenkins-git-read'   // <-- change or remove if anonymous works
+    GIT_READ_CREDS = 'Jenkins-Kontra'   // <-- change or remove if anonymous works
   }
 
   stages {
