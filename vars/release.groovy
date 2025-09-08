@@ -51,12 +51,7 @@ def call(Map cfg = [:]) {
   if (branch?.startsWith('origin/')) branch = branch.replaceFirst('^origin/', '')
   if (!branch || branch == 'HEAD') {
     try {
-      String guess = sh(script: '''
-        git branch --contains HEAD 2>/dev/null \
-          | grep '^*' \
-          | head -n1 \
-          | awk '{print $2}' || true
-      ''', returnStdout: true).trim()
+      String guess = sh(script: "git branch --contains HEAD 2>/dev/null | sed -n 's/^* \\(.*\\)$/\\1/p' | head -n1 || true", returnStdout: true).trim()
       if (guess) branch = guess
     } catch (Throwable ignore) {}
   }
@@ -74,9 +69,16 @@ def call(Map cfg = [:]) {
   boolean ghRel  = false
 
   if (shouldTag) {
-    // Ensure git identity (minimal; avoid complex shell substitutions for CPS parser)
-    sh "git config --local user.email '${gitUserEmail}' || true"
-    sh "git config --local user.name  '${gitUserName}'  || true"
+    // Ensure git identity (avoid "unable to auto-detect email address")
+    sh """
+      set -eu
+      if ! git config user.email >/dev/null 2>&1 || [ -z "\$(git config user.email || true)" ]; then
+        git config user.email '${gitUserEmail}'
+      fi
+      if ! git config user.name  >/dev/null 2>&1 || [ -z "\$(git config user.name || true)" ]; then
+        git config user.name '${gitUserName}'
+      fi
+    """
 
     if (tagAlreadyExists(tag)) {
       echo "release: tag ${tag} already exists; skipping creation"
@@ -87,7 +89,7 @@ def call(Map cfg = [:]) {
     }
 
     if (pushTags) {
-      pushTag(tag, credentialsId, ownerHint, debug)
+      pushTag(tag, credentialsId, ownerHint, githubApi, debug)
       pushed = true
     }
 
@@ -120,7 +122,7 @@ private Map detectOwnerRepo(String originUrl) {
 
 private String resolveGithubToken(String credentialsId, String ownerHint) {
   if (!credentialsId) return null
-  // Try GitHub App token (requires GitHub Branch Source plugin)
+  // Try GitHub App token (requires GitHub Branch Source plugin and an installed App)
   try {
     if (ownerHint) return githubAppToken(credentialsId: credentialsId, owner: ownerHint)
     return githubAppToken(credentialsId: credentialsId)
@@ -144,7 +146,19 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
   return null
 }
 
-private void pushTag(String tag, String credentialsId, String ownerHint, boolean debug=false) {
+/**
+ * Preflight probe: does this token SEE the repo and have push permission?
+ * Returns [code: "200"/..., push: true|false]
+ */
+private Map ghProbeRepoAccess(String token, String owner, String repo, String apiBase) {
+  String hdrs = "-H \"Authorization: Bearer ${token}\" -H \"Accept: application/vnd.github+json\""
+  String code = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
+  String body = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
+  boolean pushAllowed = (body =~ /\"permissions\"\\s*:\\s*\\{[^}]*\"push\"\\s*:\\s*true/).find()
+  return [code: code, push: pushAllowed]
+}
+
+private void pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
   Map or = detectOwnerRepo(origin)
   String httpsRepo = origin
@@ -157,7 +171,7 @@ private void pushTag(String tag, String credentialsId, String ownerHint, boolean
   }
 
   if (!token) {
-    // falls back to agent’s native auth (deploy key, cached creds, etc.)
+    // Fall back to agent’s native auth (deploy key, cached creds, etc.)
     int rc = sh(script: "git push origin ${tag}", returnStatus: true)
     if (rc != 0) {
       echo "release: push failed (status=${rc}) without token. Ensure Jenkins has push rights (deploy key with write or PAT)."
@@ -166,21 +180,30 @@ private void pushTag(String tag, String credentialsId, String ownerHint, boolean
     return
   }
 
-  // Use token for HTTPS push. For GitHub App tokens and PATs:
+  // Preflight: can this token see the repo AND push?
+  if (or.owner && or.repo) {
+    def probe = ghProbeRepoAccess(token, or.owner, or.repo, apiBase)
+    if (debug) echo "release: repo probe code=${probe.code} pushAllowed=${probe.push}"
+    if (probe.code != '200') {
+      error "release: token cannot see repo ${or.owner}/${or.repo} (HTTP ${probe.code}). Is the App installed on this repo or is PAT scoped correctly?"
+    }
+    if (!probe.push) {
+      error "release: token lacks push permission on ${or.owner}/${or.repo}. Grant Contents: Read & write (App) or use a PAT with repo contents write. Check protected tags as well."
+    }
+  }
+
+  // Use token for HTTPS push (GitHub App tokens and PATs):
   // username must be 'x-access-token' and password is the token.
   writeFile file: 'git-askpass.sh', text: '#!/bin/sh\necho "$GITHUB_TOKEN"\n'
   sh 'chmod 700 git-askpass.sh'
   def ask = "${pwd()}/git-askpass.sh"
   withEnv(["GIT_ASKPASS=${ask}", "GITHUB_TOKEN=${token}"]) {
-    if (debug && or.owner && or.repo) {
-      sh script: "curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ${token}' https://api.github.com/repos/${or.owner}/${or.repo}", returnStdout: true
-    }
     int rc = sh(script: """
        git remote set-url origin https://x-access-token@${httpsRepo.replaceFirst(/^https:\\/\\//,'')}
        GIT_CURL_VERBOSE=${debug ? 1 : 0} git push origin ${tag}
     """.stripIndent(), returnStatus: true)
     if (rc != 0) {
-      echo "release: push failed (status=${rc}). Token may lack permissions. Needs repo write (PAT) or App with Contents: Read & write installed on ${or.owner}/${or.repo}."
+      echo "release: push failed (status=${rc}). Token may lack permissions or protected tags block creation."
       error "release: git push failed"
     }
   }
