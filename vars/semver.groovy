@@ -170,10 +170,16 @@ private String readNearestTag(String tagPattern) {
 }
 
 private String maxSemver(String a, String b) {
-  List<String> as = (a ?: '0.0.0').tokenize('.')
-  List<String> bs = (b ?: '0.0.0').tokenize('.')
-  int A0 = as.size()>0 ? as[0] as int : 0; int A1 = as.size()>1 ? as[1] as int : 0; int A2 = as.size()>2 ? as[2] as int : 0
-  int B0 = bs.size()>0 ? bs[0] as int : 0; int B1 = bs.size()>1 ? bs[1] as int : 0; int B2 = bs.size()>2 ? bs[2] as int : 0
+  List<String> partsA = (a ?: '0.0.0').tokenize('.')
+  List<String> partsB = (b ?: '0.0.0').tokenize('.')
+  while (partsA.size() < 3) partsA << '0'
+  while (partsB.size() < 3) partsB << '0'
+  int A0 = partsA[0] as int
+  int A1 = partsA[1] as int
+  int A2 = partsA[2] as int
+  int B0 = partsB[0] as int
+  int B1 = partsB[1] as int
+  int B2 = partsB[2] as int
   if (A0 != B0) return (A0 > B0) ? a : b
   if (A1 != B1) return (A1 > B1) ? a : b
   if (A2 != B2) return (A2 > B2) ? a : b
