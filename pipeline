@@ -93,14 +93,10 @@ allprojects {
 }
 '''
           sh '''
-            set -euxo pipefail
-            if [ -x ./gradlew ]; then
-              echo "Using Gradle wrapper"
-              ./gradlew --no-daemon --stacktrace --info -I init.gradle clean test
-            else
-              echo "Wrapper missing → using system Gradle"
-              gradle --no-daemon --stacktrace --info -I init.gradle clean test
-            fi
+            set -eu
+            echo "Running tests with system Gradle (wrapper ignored)"
+            gradle --version
+            gradle --no-daemon --stacktrace --info -I init.gradle clean test
           '''
         }
       }
