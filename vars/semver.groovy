@@ -23,15 +23,24 @@ def call(Map cfg = [:]) {
     String head = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
     String branch = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
 
-    // Avoid bumping twice for the same commit (optional but handy)
+    // Determine forced bump/release intentions BEFORE potential skip logic
+    String preForcedBump = (cfg.forceBump ?: '').toString().toLowerCase()
+    if (!preForcedBump) {
+        if (cfg.forceMajor == true || env.FORCE_MAJOR == 'true') preForcedBump = 'major'
+        else if (cfg.forceMinor == true || env.FORCE_MINOR == 'true') preForcedBump = 'minor'
+        else if (cfg.forcePatch == true || env.FORCE_PATCH == 'true') preForcedBump = 'patch'
+    }
+    boolean preForcedRelease = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
+    boolean hasForcedIntent = (preForcedBump in ['major','minor','patch']) || preForcedRelease
+
+    // Avoid bumping twice for the same commit unless a forced action is requested
     if (fileExists(stateFile)) {
         String lastSha = readFile(stateFile).trim()
-        if (lastSha == head && cfg.skipOnSameCommit != false) {
-            // Re-use version.txt if present, else the last tag
+        if (lastSha == head && cfg.skipOnSameCommit != false && !hasForcedIntent) {
             String reuse = fileExists(versionFile) ? readFile(versionFile).trim() : readTagVersion(tagPattern, tagMode)
             env.BUILD_VERSION = reuse ?: '0.0.0'
             return [baseVersion: env.BUILD_VERSION, version: env.BUILD_VERSION, bump: 'none',
-                    isRelease: false, commitMessage: commitMsg, skipped: true]
+                    isRelease: false, commitMessage: commitMsg, skipped: true, forcedIntent: false]
         }
     }
 
@@ -55,13 +64,8 @@ def call(Map cfg = [:]) {
     int p = parts.size() > 2 ? parts[2] as int : 0
     int origPatch = p
 
-    // Forced bump precedence
-    String forcedBump = (cfg.forceBump ?: '').toString().toLowerCase()
-    if (!forcedBump) {
-        if (cfg.forceMajor == true || env.FORCE_MAJOR == 'true') forcedBump = 'major'
-        else if (cfg.forceMinor == true || env.FORCE_MINOR == 'true') forcedBump = 'minor'
-        else if (cfg.forcePatch == true || env.FORCE_PATCH == 'true') forcedBump = 'patch'
-    }
+    // Forced bump precedence (reuse pre-computed decision)
+    String forcedBump = preForcedBump
 
     String bump = 'patch'
     boolean usedForcedBump = false
@@ -96,7 +100,7 @@ def call(Map cfg = [:]) {
     writeFile file: stateFile, text: "${head}\n"
 
     // Tag only on release (and optionally only on main)
-    boolean forcedRelease = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
+    boolean forcedRelease = preForcedRelease
     boolean isRelease = forcedRelease || commitMsg.contains(releaseToken)
     boolean canTagHere = !onlyTagOnMain || (branch == mainBranch)
 
