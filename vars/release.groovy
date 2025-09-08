@@ -72,10 +72,10 @@ def call(Map cfg = [:]) {
     // Ensure git identity (avoid fatal: unable to auto-detect email)
     sh """
       set -eu
-      if ! git config user.email >/dev/null 2>&1 || [ -z "$(git config user.email || true)" ]; then
+      if ! git config user.email >/dev/null 2>&1 || [ -z \"\$(git config user.email || true)\" ]; then
         git config user.email '${gitUserEmail}'
       fi
-      if ! git config user.name  >/dev/null 2>&1 || [ -z "$(git config user.name || true)" ]; then
+      if ! git config user.name  >/dev/null 2>&1 || [ -z \"\$(git config user.name || true)\" ]; then
         git config user.name '${gitUserName}'
       fi
     """
