@@ -1,34 +1,138 @@
-pipeline {
-    
-    agent any
+// This Pipeline lives in the *library repo* itself.
+// It bootstraps/load this same repo as a Shared Library and invokes vars/* steps.
 
-    tools {
-        jdk   'temurin-21'      // must match Jenkins Tools
-        gradle 'Gradle 9.1.0-rc-2'    // must match Jenkins Tools
+pipeline {
+  agent any
+
+  tools {
+    jdk    'temurin-21'
+    gradle 'Gradle 9.1.0-rc-2' // used only if wrapper is missing
+  }
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    // optional: where to place generated files for this library repo
+    CHANGELOG_FILE = 'CHANGELOG.md'
+    VERSION_FILE   = 'version.txt'
+    // if your repo requires creds to fetch again for library loading, set the ID here:
+    GIT_READ_CREDS = 'jenkins-git-read'   // <-- change or remove if anonymous works
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-  options { timestamps() }
-  stages {
-    stage('Test library') {
+    stage('Load this repo as a library') {
       steps {
-        sh '''
-          set -e
-          if [ -x ./gradlew ]; then
-            echo "Using Gradle wrapper";
-            ./gradlew --no-daemon clean test
-          else
-            echo "Wrapper missing. Falling back to system gradle (ensure it's installed).";
-            gradle --no-daemon clean test
-          fi
-        '''
+        script {
+          // Resolve repo url/branch for the retriever
+          def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+          def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
+
+          // Load the *current commit* as a Shared Library so we can call vars/* right here.
+          library(
+            identifier: "kontra-ci@${branch}",   // the name here is arbitrary in this context
+            retriever: modernSCM([
+              $class: 'GitSCM',
+              userRemoteConfigs: [[url: repoUrl, credentialsId: env.GIT_READ_CREDS]],
+              branches: [[name: "*/${branch}"]],
+              extensions: []   // keep it simple; Jenkins will clone to a tmp dir
+            ])
+          )
+        }
       }
     }
-    stage('Archive reports') {
+
+    stage('Versioning (vars/semver.groovy)') {
       steps {
-        junit 'build/test-results/test/*.xml'
-        archiveArtifacts 'build/reports/tests/test/**'
+        script {
+          // Use library step directly (now available in the Pipeline script):
+          def v = semver(
+            strategy: 'tag',         // read current version from latest vX.Y.Z tag
+            versionFile: env.VERSION_FILE,
+            tagOnRelease: true,      // create tag if '!release' in the last commit message
+            pushTags: true           // push the tag (ensure this job can push)
+          )
+          currentBuild.displayName = "v${v.version}"
+          echo "semver: bump=${v.bump}, version=${v.version}, isRelease=${v.isRelease}"
+          writeFile file: env.VERSION_FILE, text: v.version + "\n"
+          archiveArtifacts artifacts: env.VERSION_FILE, fingerprint: true
+        }
+      }
+    }
+
+    stage('Changelog (vars/generateChangelog.groovy)') {
+      when { expression { currentBuild.changeSets?.size() > 0 } }
+      steps {
+        script {
+          def out = generateChangelog(
+            outputFile: env.CHANGELOG_FILE,
+            version: env.BUILD_VERSION  // set by semver
+          )
+          echo "Changelog updated → ${out ?: 'no changes'}"
+          archiveArtifacts artifacts: env.CHANGELOG_FILE, fingerprint: true
+        }
+      }
+    }
+
+    stage('Unit tests (JenkinsPipelineUnit)') {
+      steps {
+        script {
+          // Ensure Jenkins repo is available, even if build.gradle forgets it
+          writeFile file: 'init.gradle', text: '''
+allprojects {
+  repositories {
+    maven { url "https://repo.jenkins-ci.org/releases/" }
+    mavenCentral()
+  }
+}
+'''
+          sh '''
+            set -euxo pipefail
+            if [ -x ./gradlew ]; then
+              echo "Using Gradle wrapper"
+              ./gradlew --no-daemon --stacktrace --info -I init.gradle clean test
+            else
+              echo "Wrapper missing → using system Gradle"
+              gradle --no-daemon --stacktrace --info -I init.gradle clean test
+            fi
+          '''
+        }
+      }
+      post {
+        always {
+          junit allowEmptyResults: true, testResults: 'build/test-results/test/*.xml'
+          archiveArtifacts allowEmptyArchive: true, artifacts: 'build/reports/tests/test/**'
+        }
+      }
+    }
+
+    // Optional: smoke-call other vars in dry-run for extra confidence
+    stage('Smoke vars (optional)') {
+      when { expression { fileExists('vars/writeEnvFile.groovy') && fileExists('vars/deploySystemd.groovy') } }
+      steps {
+        script {
+          writeEnvFile(dryRun:true, path: "${pwd()}/.env", keys:['FOO','BAR'], data:[FOO:'1', BAR:'2'])
+          deploySystemd(
+            dryRun:true,
+            service:'kontraLib-smoke',
+            workingDir: "${pwd()}",
+            installUnit:true, overwriteUnit:true, useSudo:false,
+            execStart:"/usr/bin/env bash -lc 'echo hello from kontraLib'"
+          )
+        }
       }
     }
   }
-  post { always { echo 'Pipeline completed.' } }
+
+  post {
+    always { echo 'Pipeline completed.' }
+  }
 }
+// End of Jenkinsfile
