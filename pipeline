@@ -36,16 +36,14 @@ pipeline {
             def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
             // Load the *current commit* as a Shared Library so we can call vars/* right here.
-            library(
-                identifier: 'kontra-jenkins-lib@main',
-                retriever: modernSCM([
-                    $class: 'GitSCMSource',
-                    repoOwner: 'Kontra-tel',
-                    repoName: 'kontra-jenkins-lib',
-                    credentialsId: 'Jenkins-Kontra',
-                    traits: []
-                ])
-            )
+            // Generic Git SCM Source (must provide 'remote')
+            def src = [
+            $class: 'jenkins.plugins.git.GitSCMSource',
+            remote: 'https://github.com/Kontra-tel/kontra-jenkins-lib.git',
+            credentialsId: 'Jenkins-Kontra',   // omit if public
+            traits: []
+            ]
+            library(identifier: 'kontra-jenkins-lib@main', retriever: modernSCM(src))
         }
       }
     }
