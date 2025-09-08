@@ -49,12 +49,24 @@ pipeline {
     stage('Load this repo as a library') {
       steps {
         script {
+          // repo URL from current checkout
           def repoUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-          def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
-          // Optional: assert the branch exists remotely (helps catch typos like main vs master)
-          // sh "git ls-remote --heads ${repoUrl} ${branch} && true"
+          // Resolve a usable branch name:
+          // 1) Multibranch env var, 2) local symbolic branch, 3) remote default HEAD, 4) fallback 'main'
+          def branch = env.BRANCH_NAME?.trim()
+          if (!branch) {
+            branch = sh(script: 'git symbolic-ref --short -q HEAD || true', returnStdout: true).trim()
+          }
+          if (!branch || branch == 'HEAD') {
+            branch = sh(
+              script: "git ls-remote --symref origin HEAD | awk '/^ref:/ {sub(\"refs/heads/\", \"\", $2); print $2; exit}'",
+              returnStdout: true
+            ).trim()
+          }
+          if (!branch) { branch = 'main' }  // last-resort default
 
+          // Use classic GitSCM so Jenkins actually checks out that branch for the lib
           def scmCfg = [
             $class: 'GitSCM',
             branches: [[name: "*/${branch}"]],
@@ -70,6 +82,7 @@ pipeline {
         }
       }
     }
+
 
     stage('Versioning (vars/semver.groovy)') {
       steps {
