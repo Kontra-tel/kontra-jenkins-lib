@@ -1,40 +1,24 @@
 // vars/generateChangelog.groovy
+import org.jenkinsci.plugins.workflow.cps.NonCPS
+
 def call(Map cfg = [:]) {
     def outputFile  = cfg.outputFile ?: 'CHANGELOG.md'
-    def appendTo    = cfg.copyTo     ?: null      // optional second path to copy to
+    def appendTo    = cfg.copyTo     ?: null
     def resetToken  = cfg.resetToken ?: '!resetLog'
     def title       = cfg.title      ?: '# Changelog'
     def version     = cfg.version    ?: (env.BUILD_VERSION ?: 'Unversioned')
 
-    // Capture changesets once
-    def changeSets = currentBuild?.changeSets ?: []
-    boolean hasChanges = changeSets.size() > 0 && changeSets.any { it?.items && it.items.size() > 0 }
-
-    if (!hasChanges) {
+    // ---- Extract commit entries BEFORE any pipeline steps run
+    List<Map> commitEntries = extractCommitEntries(currentBuild?.changeSets)
+    if (!commitEntries || commitEntries.isEmpty()) {
         echo 'No change entries detected (no commit diffs in this build)'
         return null
     }
 
-    // Reset if requested / first time
+    // ---- Now it's safe to call steps (no GitChangeSetList in scope)
     if (!fileExists(outputFile) || (env.COMMIT_MESSAGE ?: '').contains(resetToken)) {
         writeFile file: outputFile, text: "${title}\n"
     }
-
-    // Extract commit metadata to simple serializable structures to avoid keeping GitChangeSetList (non-serializable) in scope across CPS steps
-    List<Map> commitEntries = []
-    if (hasChanges) {
-        changeSets.each { cs ->
-            cs.items.each { entry ->
-                commitEntries << [
-                    summary: entry.msg?.readLines()?.first()?.trim(),
-                    hash: entry.commitId,
-                    author: entry.author.fullName
-                ]
-            }
-        }
-    }
-    // Drop original changeSets reference to prevent NotSerializableException during pipeline checkpoint
-    changeSets = null
 
     // Resolve repo URL
     def repoUrl = env.GIT_URL
@@ -55,13 +39,13 @@ def call(Map cfg = [:]) {
         def shortHash  = hash.take(7)
         def commitLink = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${hash})]" : "[${shortHash}]"
         changes += "- ${summary} ${commitLink}\n"
-        authors << e.author
+        if (e.author) authors << e.author
     }
 
     changes += '\n### Authors:\n'
-    authors.each { author -> changes += "- ${author}\n" }
+    authors.each { a -> changes += "- ${a}\n" }
 
-    // Prevent duplicate version section (idempotent if rerun in same build)
+    // Idempotency: skip if this version block already exists
     def existing = readFile(file: outputFile)
     if (existing.contains("## ${version} (")) {
         echo "Changelog: version ${version} section already present, skipping append"
@@ -76,4 +60,23 @@ def call(Map cfg = [:]) {
     }
 
     return outputFile
+}
+
+@NonCPS
+private List<Map> extractCommitEntries(def changeSets) {
+    def out = []
+    if (changeSets) {
+        for (def cs : changeSets) {
+            if (!cs?.items) continue
+            for (def entry : cs.items) {
+                def firstLine = (entry?.msg ?: '').readLines()?.first()?.trim()
+                out << [
+                    summary: firstLine,
+                    hash   : entry?.commitId ?: '',
+                    author : entry?.author?.fullName ?: ''
+                ]
+            }
+        }
+    }
+    return out
 }
