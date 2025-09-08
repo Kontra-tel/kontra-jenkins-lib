@@ -40,7 +40,6 @@ pipeline {
                 identifier: 'kontra-jenkins-lib@main',
                 retriever: modernSCM([
                     $class: 'GitSCMSource',
-                    apiUri: '',
                     repoOwner: 'Kontra-tel',
                     repoName: 'kontra-jenkins-lib',
                     credentialsId: 'Jenkins-Kontra',
