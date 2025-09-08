@@ -19,17 +19,6 @@ def call(Map cfg = [:]) {
   String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
 // Lightweight probe without regex (regex caused sandbox PatternSyntax issues under CPS)
-private Map ghProbeRepoAccess(String token, String owner, String repo, String apiBase) {
-  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json'"
-  String code = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
-  String body = ''
-  if (code == '200') {
-    body = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}", returnStdout: true).trim()
-  }
-  // Very naive permission detection – avoids regex: look for '"permissions"' then '"push":true'
-  boolean pushAllowed = (body.contains('"permissions"') && (body.contains('"push":true') || body.contains('"push": true')))
-  return [code: code, push: pushAllowed]
-}
   final boolean pushTags            = (cfg.pushTags == false) ? false : true
   final String  credentialsId       = (cfg.credentialsId ?: null) as String
   final String  ownerHint           = (cfg.owner ?: null) as String
@@ -71,16 +60,9 @@ private Map ghProbeRepoAccess(String token, String owner, String repo, String ap
   boolean ghRel  = false
 
   if (shouldTag) {
-    // Ensure git identity (avoid "unable to auto-detect email address")
-    sh """
-      set -eu
-      if ! git config user.email >/dev/null 2>&1 || [ -z "\$(git config user.email || true)" ]; then
-        git config user.email '${gitUserEmail}'
-      fi
-      if ! git config user.name  >/dev/null 2>&1 || [ -z "\$(git config user.name || true)" ]; then
-        git config user.name '${gitUserName}'
-      fi
-    """
+  // Ensure git identity (keep simple to avoid CPS parser issues)
+  sh "git config --local user.email '${gitUserEmail}' || true"
+  sh "git config --local user.name  '${gitUserName}'  || true"
 
     if (tagAlreadyExists(tag)) {
       echo "release: tag ${tag} already exists; skipping creation"
@@ -182,17 +164,6 @@ private void pushTag(String tag, String credentialsId, String ownerHint, String 
     return
   }
 
-  // Preflight: can this token see the repo AND push?
-  if (or.owner && or.repo) {
-    def probe = ghProbeRepoAccess(token, or.owner, or.repo, apiBase)
-    if (debug) echo "release: repo probe code=${probe.code} pushAllowed=${probe.push}"
-    if (probe.code != '200') {
-      error "release: token cannot see repo ${or.owner}/${or.repo} (HTTP ${probe.code}). Is the App installed on this repo or is PAT scoped correctly?"
-    }
-    if (!probe.push) {
-      error "release: token lacks push permission on ${or.owner}/${or.repo}. Grant Contents: Read & write (App) or use a PAT with repo contents write. Check protected tags as well."
-    }
-  }
 
   // Use token for HTTPS push (GitHub App tokens and PATs):
   // username must be 'x-access-token' and password is the token.
