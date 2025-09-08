@@ -69,16 +69,9 @@ def call(Map cfg = [:]) {
   boolean ghRel  = false
 
   if (shouldTag) {
-    // Ensure git identity (avoid "unable to auto-detect email address")
-    sh """
-      set -eu
-      if ! git config user.email >/dev/null 2>&1 || [ -z "\$(git config user.email || true)" ]; then
-        git config user.email '${gitUserEmail}'
-      fi
-      if ! git config user.name  >/dev/null 2>&1 || [ -z "\$(git config user.name || true)" ]; then
-        git config user.name '${gitUserName}'
-      fi
-    """
+    // Ensure git identity (minimal; avoid complex shell substitutions for CPS parser)
+    sh "git config --local user.email '${gitUserEmail}' || true"
+    sh "git config --local user.name  '${gitUserName}'  || true"
 
     if (tagAlreadyExists(tag)) {
       echo "release: tag ${tag} already exists; skipping creation"
