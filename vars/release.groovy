@@ -51,7 +51,12 @@ def call(Map cfg = [:]) {
   if (branch?.startsWith('origin/')) branch = branch.replaceFirst('^origin/', '')
   if (!branch || branch == 'HEAD') {
     try {
-      String guess = sh(script: "git branch --contains HEAD 2>/dev/null | sed -n 's/^* \\(.*\\)$/\\1/p' | head -n1 || true", returnStdout: true).trim()
+      String guess = sh(script: '''
+        git branch --contains HEAD 2>/dev/null \
+          | grep '^*' \
+          | head -n1 \
+          | awk '{print $2}' || true
+      ''', returnStdout: true).trim()
       if (guess) branch = guess
     } catch (Throwable ignore) {}
   }
