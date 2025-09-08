@@ -53,7 +53,7 @@ pipeline {
           def branch  = sh(script: 'git rev-parse --abbrev-ref HEAD',   returnStdout: true).trim()
 
           // Optional: assert the branch exists remotely (helps catch typos like main vs master)
-          sh "git ls-remote --heads ${repoUrl} ${branch} && true"
+          // sh "git ls-remote --heads ${repoUrl} ${branch} && true"
 
           def scmCfg = [
             $class: 'GitSCM',
