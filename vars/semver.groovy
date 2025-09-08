@@ -61,6 +61,7 @@ def call(Map cfg = [:]) {
     int M = (parts.size() > 0 ? parts[0] as int : 0)
     int m = (parts.size() > 1 ? parts[1] as int : 0)
     int p = (parts.size() > 2 ? parts[2] as int : 0)
+    int origPatch = p
 
     // Forced bump precedence (explicit cfg > env flags > commit message tokens)
     String forcedBump = (cfg.forceBump ?: '')?.toString().toLowerCase()
@@ -85,6 +86,18 @@ def call(Map cfg = [:]) {
             else { p++; bump = 'patch' }
     }
 
+    // Optional cumulative patch bump: increment patch by number of commits since last tag instead of just +1
+    int commitsSinceTag = 0
+    boolean cumulativePatch = (cfg.cumulativePatch == true)
+    if (cumulativePatch && strategy == 'tag' && bump == 'patch' && !usedForcedBump && !commitMsg.contains(majorToken) && !commitMsg.contains(minorToken)) {
+        try {
+            commitsSinceTag = sh(script: "git rev-list --count $(git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || echo v0.0.0)..HEAD", returnStdout: true).trim() as int
+        } catch (ignored) { commitsSinceTag = 0 }
+        if (commitsSinceTag > 0) {
+            p = origPatch + commitsSinceTag
+        }
+    }
+
     String version = "${M}.${m}.${p}"
     env.BUILD_VERSION = version
 
@@ -96,6 +109,11 @@ def call(Map cfg = [:]) {
     // Tag on release
     boolean forcedRelease = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
     boolean isRelease = forcedRelease || commitMsg.contains(releaseToken)
+    // If release forced but no explicit bump token or forced bump changed version beyond current? ensure at least patch increments
+    if (isRelease && !usedForcedBump && !commitMsg.contains(majorToken) && !commitMsg.contains(minorToken) && bump == 'patch') {
+        // Already incremented patch in normal path; nothing else needed.
+        // (If future logic skips patch increment, enforce here.)
+    }
     if (isRelease && tagOnRelease) {
         sh "git tag -a v${version} -m 'Release v${version}'"
         if (pushTags) {
@@ -110,6 +128,8 @@ def call(Map cfg = [:]) {
         isRelease     : isRelease,
         commitMessage : commitMsg,
         forcedBump    : usedForcedBump ? forcedBump : null,
-        forcedRelease : forcedRelease
+    forcedRelease : forcedRelease,
+    commitsSinceTag: commitsSinceTag,
+    cumulativePatch: cumulativePatch
     ]
 }

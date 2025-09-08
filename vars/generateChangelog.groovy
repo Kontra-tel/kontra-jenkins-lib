@@ -6,9 +6,12 @@ def call(Map cfg = [:]) {
     def title       = cfg.title      ?: '# Changelog'
     def version     = cfg.version    ?: (env.BUILD_VERSION ?: 'Unversioned')
 
-    // Skip if no changes
-    if (currentBuild?.changeSets?.size() == 0) {
-        echo 'No changes detected, skipping changelog generation'
+    // Capture changesets once
+    def changeSets = currentBuild?.changeSets ?: []
+    boolean hasChanges = changeSets.size() > 0 && changeSets.any { it?.items && it.items.size() > 0 }
+
+    if (!hasChanges) {
+        echo 'No change entries detected (no commit diffs in this build)'
         return null
     }
 
@@ -30,9 +33,9 @@ def call(Map cfg = [:]) {
     def changes = "## ${version} (${timestamp} UTC)\n"
     def authors = [] as Set
 
-    for (changeLog in currentBuild.changeSets) {
-        for (entry in changeLog.items) {
-            def summary    = entry.msg?.split('\n')[0]?.trim()
+    changeSets.each { cs ->
+        cs.items.each { entry ->
+            def summary    = entry.msg?.readLines()?.first()?.trim()
             def hash       = entry.commitId
             def shortHash  = hash.take(7)
             def commitLink = repoUrl ? "[[${shortHash}](${repoUrl}/commit/${hash})]" : "[${shortHash}]"
@@ -43,6 +46,13 @@ def call(Map cfg = [:]) {
 
     changes += '\n### Authors:\n'
     authors.each { author -> changes += "- ${author}\n" }
+
+    // Prevent duplicate version section (idempotent if rerun in same build)
+    def existing = readFile(file: outputFile)
+    if (existing.contains("## ${version} (")) {
+        echo "Changelog: version ${version} section already present, skipping append"
+        return outputFile
+    }
 
     echo changes
     sh "printf '%s\n' \"${changes}\" >> '${outputFile}'"
