@@ -15,6 +15,13 @@ pipeline {
     disableConcurrentBuilds()
   }
 
+  parameters {
+    booleanParam(name: 'FORCE_MAJOR',   defaultValue: false, description: 'Force major version bump (!major)')
+    booleanParam(name: 'FORCE_MINOR',   defaultValue: false, description: 'Force minor version bump (!minor)')
+    booleanParam(name: 'FORCE_PATCH',   defaultValue: false, description: 'Force patch version bump (default)')
+    booleanParam(name: 'FORCE_RELEASE', defaultValue: false, description: 'Force tagging this build as a release (!release)')
+  }
+
   environment {
     // optional: where to place generated files for this library repo
     CHANGELOG_FILE = 'CHANGELOG.md'
@@ -53,13 +60,17 @@ pipeline {
         script {
           // Use library step directly (now available in the Pipeline script):
           def v = semver(
-            strategy: 'tag',         // read current version from latest vX.Y.Z tag
+            strategy: 'tag',
             versionFile: env.VERSION_FILE,
-            tagOnRelease: true,      // create tag if '!release' in the last commit message
-            pushTags: true           // push the tag (ensure this job can push)
+            tagOnRelease: true,
+            pushTags: true,
+            forceMajor: params.FORCE_MAJOR,
+            forceMinor: params.FORCE_MINOR,
+            forcePatch: params.FORCE_PATCH,
+            forceRelease: params.FORCE_RELEASE
           )
           currentBuild.displayName = "v${v.version}"
-          echo "semver: bump=${v.bump}, version=${v.version}, isRelease=${v.isRelease}"
+          echo "semver: bump=${v.bump}, version=${v.version}, isRelease=${v.isRelease}, forcedBump=${v.forcedBump ?: 'none'}, forcedRelease=${v.forcedRelease}" 
           writeFile file: env.VERSION_FILE, text: v.version + "\n"
           archiveArtifacts artifacts: env.VERSION_FILE, fingerprint: true
         }

@@ -62,10 +62,28 @@ def call(Map cfg = [:]) {
     int m = (parts.size() > 1 ? parts[1] as int : 0)
     int p = (parts.size() > 2 ? parts[2] as int : 0)
 
+    // Forced bump precedence (explicit cfg > env flags > commit message tokens)
+    String forcedBump = (cfg.forceBump ?: '')?.toString().toLowerCase()
+    if (!forcedBump) {
+        if (cfg.forceMajor == true || env.FORCE_MAJOR == 'true') forcedBump = 'major'
+        else if (cfg.forceMinor == true || env.FORCE_MINOR == 'true') forcedBump = 'minor'
+        else if (cfg.forcePatch == true || env.FORCE_PATCH == 'true') forcedBump = 'patch'
+    }
+
     String bump = 'patch'
-    if (commitMsg.contains(majorToken)) { M++; m = 0; p = 0; bump = 'major' }
-    else if (commitMsg.contains(minorToken)) { m++; p = 0; bump = 'minor' }
-    else { p++; bump = 'patch' }
+    boolean usedForcedBump = false
+    switch (forcedBump) {
+        case 'major':
+            M++; m = 0; p = 0; bump = 'major'; usedForcedBump = true; break
+        case 'minor':
+            m++; p = 0; bump = 'minor'; usedForcedBump = true; break
+        case 'patch':
+            p++; bump = 'patch'; usedForcedBump = true; break
+        default:
+            if (commitMsg.contains(majorToken)) { M++; m = 0; p = 0; bump = 'major' }
+            else if (commitMsg.contains(minorToken)) { m++; p = 0; bump = 'minor' }
+            else { p++; bump = 'patch' }
+    }
 
     String version = "${M}.${m}.${p}"
     env.BUILD_VERSION = version
@@ -76,7 +94,8 @@ def call(Map cfg = [:]) {
     }
 
     // Tag on release
-    boolean isRelease = commitMsg.contains(releaseToken)
+    boolean forcedRelease = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
+    boolean isRelease = forcedRelease || commitMsg.contains(releaseToken)
     if (isRelease && tagOnRelease) {
         sh "git tag -a v${version} -m 'Release v${version}'"
         if (pushTags) {
@@ -85,10 +104,12 @@ def call(Map cfg = [:]) {
     }
 
     return [
-        baseVersion: current,
-        version: version,
-        bump: bump,
-        isRelease: isRelease,
-        commitMessage: commitMsg
+        baseVersion   : current,
+        version       : version,
+        bump          : bump,
+        isRelease     : isRelease,
+        commitMessage : commitMsg,
+        forcedBump    : usedForcedBump ? forcedBump : null,
+        forcedRelease : forcedRelease
     ]
 }
