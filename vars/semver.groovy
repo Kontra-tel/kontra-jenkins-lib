@@ -55,6 +55,21 @@ def call(Map cfg = [:]) {
   }
   String head   = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
   String branch = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+  if (branch == 'HEAD' || !branch) {
+    // Use Jenkins-provided env if available
+    branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').trim()
+  }
+  if (branch == 'origin/HEAD') {
+    branch = branch.replace('origin/HEAD', '').replace('origin/', '').trim()
+  }
+  if (!branch || branch == 'HEAD') {
+    // Try to infer from branches containing HEAD
+    try {
+      String guess = sh(script: "git branch --contains HEAD 2>/dev/null | grep -v '(HEAD detached' | head -n1 | sed 's/* //' || true", returnStdout: true).trim()
+      if (guess) branch = guess
+    } catch (Throwable ignore) {}
+  }
+  if (!branch) branch = 'main'
 
   // Skip re-bump for same commit unless explicitly forced
   if (fileExists(stateFile) && cfg.skipOnSameCommit != false && forcedBump == '') {

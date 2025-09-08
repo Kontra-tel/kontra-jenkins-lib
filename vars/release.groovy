@@ -42,6 +42,19 @@ def call(Map cfg = [:]) {
   // Repo facts
   String commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
   String branch    = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+  if (branch == 'HEAD' || !branch) {
+    branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').trim()
+  }
+  if (branch == 'origin/HEAD') {
+    branch = branch.replace('origin/HEAD', '').replace('origin/', '').trim()
+  }
+  if (!branch || branch == 'HEAD') {
+    try {
+      String guess = sh(script: "git branch --contains HEAD 2>/dev/null | grep -v '(HEAD detached' | head -n1 | sed 's/* //' || true", returnStdout: true).trim()
+      if (guess) branch = guess
+    } catch (Throwable ignore) {}
+  }
+  if (!branch) branch = 'main'
   String tag       = "${tagPrefix}${version}"
 
   // Decide if we should tag
