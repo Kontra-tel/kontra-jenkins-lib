@@ -20,17 +20,42 @@ def call(Map cfg = [:]) {
     def commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
     env.COMMIT_MESSAGE = commitMsg
 
+    // ---- config knobs (with sensible defaults)
+    def tagPattern = cfg.tagPattern ?: 'v[0-9]*'     // e.g. 'v[0-9]*' or 'api-v[0-9]*'
+    def tagMode    = (cfg.tagMode ?: 'nearest')      // 'nearest' or 'latest'
+    def versionFile = cfg.versionFile ?: 'version.txt'
+
+    // Ensure we can see remote tags (ok with shallow clones)
+    sh(label: 'Fetch tags', script: "git fetch --tags --force --prune 2>/dev/null || true")
+
     // Determine current version
     String current = '0.0.0'
     if (strategy == 'tag') {
-        def tag = sh(script: "git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0.0",
-                     returnStdout: true).trim()
-        current = tag.startsWith('v') ? tag.substring(1) : tag
+        String foundTag = ''
+        if (tagMode == 'latest') {
+            // Latest version-looking tag in the repo (version-aware sort)
+            foundTag = sh(
+            script: "git -c versionsort.suffix=- tag -l '${tagPattern}' --sort=-v:refname | head -n1",
+            returnStdout: true
+            ).trim()
+        } else {
+            // Nearest tag reachable from HEAD (what you had)
+            foundTag = sh(
+            script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true",
+            returnStdout: true
+            ).trim()
+        }
+
+        if (!foundTag) foundTag = 'v0.0.0'  // no tags yet
+
+        // Normalize: grab first X.Y.Z, ignore prefix/suffix like 'v' or '-rc.1'
+        def m = (foundTag =~ /(\d+)\.(\d+)\.(\d+)/)
+        current = m.find() ? m.group(0) : '0.0.0'
     } else {
         if (fileExists(versionFile)) {
             current = readFile(versionFile).trim()
         } else {
-            writeFile file: versionFile, text: current
+            writeFile file: versionFile, text: current + '\n'
         }
     }
 
