@@ -9,6 +9,8 @@ def call(Map cfg = [:]) {
     def writeFileOut  = (cfg.writeFile    == false) ? false : true
     def tagOnRelease  = (cfg.tagOnRelease == false) ? false : true
     def pushTags      = (cfg.pushTags     == false) ? false : true
+    def tagPattern = cfg.tagPattern ?: 'v[0-9]*'     // e.g. 'v[0-9]*' or 'api-v[0-9]*'
+    def tagMode    = (cfg.tagMode ?: 'nearest')      // 'nearest' or 'latest'
 
     // Make sure we have tags for 'tag' strategy
     if (strategy == 'tag') {
@@ -19,11 +21,6 @@ def call(Map cfg = [:]) {
     // Last commit message (used for bump & release)
     def commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
     env.COMMIT_MESSAGE = commitMsg
-
-    // ---- config knobs (with sensible defaults)
-    def tagPattern = cfg.tagPattern ?: 'v[0-9]*'     // e.g. 'v[0-9]*' or 'api-v[0-9]*'
-    def tagMode    = (cfg.tagMode ?: 'nearest')      // 'nearest' or 'latest'
-    def versionFile = cfg.versionFile ?: 'version.txt'
 
     // Ensure we can see remote tags (ok with shallow clones)
     sh(label: 'Fetch tags', script: "git fetch --tags --force --prune 2>/dev/null || true")
