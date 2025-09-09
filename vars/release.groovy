@@ -15,7 +15,6 @@
 // Returns: [tag, tagged, pushed, githubReleased, isRelease, branch]
 //
 def call(Map cfg = [:]) {
-  // Required
   String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
 
@@ -31,7 +30,7 @@ def call(Map cfg = [:]) {
   // Auth / push
   final boolean pushTags           = (cfg.pushTags == false) ? false : true
   final String  credentialsId      = (cfg.credentialsId ?: null) as String
-  final String  ownerHint          = (cfg.owner ?: cfg.ownerHint ?: null) as String  // accept both keys
+  final String  ownerHint          = (cfg.owner ?: cfg.ownerHint ?: null) as String // accept both
   final String  gitUserName        = (cfg.gitUserName ?: 'Jenkins CI') as String
   final String  gitUserEmail       = (cfg.gitUserEmail ?: 'jenkins@local') as String
   final boolean debug              = (cfg.debug == true || (binding.hasVariable('params') && params.DEBUG_RELEASE == true))
@@ -73,7 +72,7 @@ def call(Map cfg = [:]) {
     sh "git config --local user.name  '${gitUserName}'  || true"
 
     if (tagAlreadyExists(tag)) {
-      echo "release: tag ${tag} already exists; skipping creation"
+      echo "release: tag ${tag} already exists locally; skipping creation"
       tagged = true
     } else {
       sh "git tag -a ${tag} -m 'Release ${tag}'"
@@ -81,7 +80,7 @@ def call(Map cfg = [:]) {
     }
 
     if (pushTags) {
-      pushed = pushTag(tag, credentialsId, ownerHint, githubApi, debug)
+      pushed = pushOrCreateTag(tag, credentialsId, ownerHint, githubApi, gitUserName, gitUserEmail, debug)
     }
 
     if (createGithubRelease && credentialsId) {
@@ -137,7 +136,13 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
   return null
 }
 
-private boolean pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
+private boolean remoteTagExistsAPI(String owner, String repo, String token, String apiBase, String tag) {
+  if (!token || !owner || !repo) return false
+  String code = sh(script: "curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${owner}/${repo}/git/refs/tags/${tag}", returnStdout: true).trim()
+  return code == '200'
+}
+
+private boolean pushOrCreateTag(String tag, String credentialsId, String ownerHint, String apiBase, String gitUserName, String gitUserEmail, boolean debug=false) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
   Map or = detectOwnerRepo(origin)
   String httpsRepo = origin
@@ -149,26 +154,34 @@ private boolean pushTag(String tag, String credentialsId, String ownerHint, Stri
 
   if (debug) {
     echo "release: pushTag repo=${or.owner}/${or.repo} credId=${credentialsId ?: 'none'} token=${obf}"
-    // Probe permissions (helpful when 403)
     try {
-      String permJson = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${or.owner}/${or.repo}", returnStdout: true).trim()
-      echo "release: repo perms snippet: ${permJson.replaceAll(/\\s+/,' ').take(200)}…"
+      String who = token?.startsWith('ghs_') ? sh(script: "curl -s -H 'Authorization: Bearer ${token}' ${apiBase}/app | jq -r '.slug // .name // \"app\"' 2>/dev/null || true", returnStdout: true).trim() : sh(script: "curl -s -H 'Authorization: Bearer ${token}' ${apiBase}/user | jq -r '.login // \"user\"' 2>/dev/null || true", returnStdout: true).trim()
+      if (who) echo "release: token actor=${who}"
+    } catch (Throwable ignore) {}
+    // Probe perms and tag rules
+    try {
+      String perms = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${or.owner}/${or.repo}", returnStdout: true).trim()
+      echo "release: repo perms snippet: ${perms.replaceAll(/\\s+/,' ').take(200)}…"
       String rules = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' '${apiBase}/repos/${or.owner}/${or.repo}/rulesets?target=tag'", returnStdout: true).trim()
       echo "release: tag rulesets present: ${rules ? rules.replaceAll(/\\s+/,' ').take(200)+'…' : 'none'}"
     } catch (Throwable ignore) { echo 'release: permission/ruleset probe failed (ignored)' }
   }
 
-  if (!token) {
-    // No token supplied: try agent’s auth (deploy key, cached creds)
-    int rc = sh(script: "git push origin ${tag}", returnStatus: true)
-    if (rc != 0) {
-      echo "release: push failed (status=${rc}) without token. Configure a PAT or GitHub App credential with write + ruleset bypass."
-      error "release: git push failed (no token)"
-    }
+  // If the tag already exists remotely, we're done.
+  if (remoteTagExistsAPI(or.owner, or.repo, token, apiBase, tag)) {
+    if (debug) echo "release: remote tag ${tag} already exists; skipping push"
     return true
   }
 
-  // Embed token directly into the remote URL (reliable for PATs and App installation tokens)
+  if (!token) {
+    // Try agent’s auth (deploy key, cached creds)
+    int rc0 = sh(script: "git push origin ${tag}", returnStatus: true)
+    if (rc0 == 0) return true
+    echo "release: push failed (status=${rc0}) without token. Configure a PAT or GitHub App credential with write + (if needed) ruleset bypass."
+    error "release: git push failed (no token)"
+  }
+
+  // Try a normal git push using token in remote URL (works with PATs and most GitHub App tokens)
   String hostPath = httpsRepo.replaceFirst(/^https:\\/\\//, '')
   int rc = sh(script: """
     set -e
@@ -176,13 +189,52 @@ private boolean pushTag(String tag, String credentialsId, String ownerHint, Stri
     GIT_CURL_VERBOSE=${debug ? 1 : 0} git push origin ${tag}
   """.stripIndent(), returnStatus: true)
 
-  if (rc != 0) {
-    echo "release: push failed (status=${rc}). This is typically either:"
-    echo " - token lacks Contents: write on ${or.owner}/${or.repo}, or"
-    echo " - a tag ruleset protects '${tag}' and your actor (App/user) is not on the bypass list."
-    error "release: git push failed"
+  if (rc == 0) return true
+
+  // Fallback: create the annotated tag via GitHub REST API (respects rulesets & bypass lists)
+  echo "release: git push blocked (status=${rc}); trying REST API fallback to create tag ${tag}"
+  boolean apiOk = createTagViaAPI(or.owner, or.repo, token, apiBase, tag, gitUserName, gitUserEmail)
+  if (apiOk) {
+    echo "release: tag ${tag} created via REST API"
+    return true
   }
-  return true
+
+  echo "release: API fallback failed. Either token lacks Contents: write or tag ruleset blocks creation for this actor."
+  error "release: tag creation failed"
+}
+
+private boolean createTagViaAPI(String owner, String repo, String token, String apiBase, String tag, String gitUserName, String gitUserEmail) {
+  if (!owner || !repo || !token) return false
+
+  // If it already exists remotely, treat as success
+  String exists = sh(script: "curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${owner}/${repo}/git/refs/tags/${tag}", returnStdout: true).trim()
+  if (exists == '200') return true
+
+  String commitSha = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
+  String iso = sh(script: "date -u +%Y-%m-%dT%H:%M:%SZ", returnStdout: true).trim()
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json'"
+
+  // 1) Create annotated tag object
+  String payloadTag = """{"tag":"${tag}","message":"Release ${tag}","object":"${commitSha}","type":"commit","tagger":{"name":"${gitUserName}","email":"${gitUserEmail}","date":"${iso}"}}"""
+  String createTagJson = sh(script: "curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/git/tags -d '${payloadTag}'", returnStdout: true).trim()
+  String tagObjSha = sh(script: "printf %s '${createTagJson}' | sed -n 's/.*\"sha\"\\s*:\\s*\"\\([0-9a-f]\\{40\\}\\)\".*/\\1/p' | head -n1", returnStdout: true).trim()
+  if (!tagObjSha) {
+    // If 422 "already_exists" we’ll assume the tag object exists; proceed to create ref
+    String code = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}/git/tags/${tag}", returnStdout: true).trim()
+    if (code != '200') return false
+    tagObjSha = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/git/tags/${tag} | sed -n 's/.*\"sha\"\\s*:\\s*\"\\([0-9a-f]\\{40\\}\\)\".*/\\1/p' | head -n1", returnStdout: true).trim()
+    if (!tagObjSha) return false
+  }
+
+  // 2) Create ref pointing to tag object
+  String payloadRef = """{"ref":"refs/tags/${tag}","sha":"${tagObjSha}"}"""
+  String refCode = sh(script: "curl -s -o /dev/null -w '%{http_code}' -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/git/refs -d '${payloadRef}'", returnStdout: true).trim()
+  if (refCode == '201' || refCode == '200') return true
+  if (refCode == '422') {
+    // Reference already exists
+    return true
+  }
+  return false
 }
 
 private boolean createOrUpdateRelease(String tag, String credentialsId, String apiBase, boolean draft, boolean prerelease, boolean genNotes) {
