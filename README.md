@@ -51,7 +51,7 @@ pipeline {
 
 ## semver
 
-Computes a version based on the latest tag and/or `version.txt`, with optional forced bumps:
+Computes a version based on the latest tag and/or `version.txt`, with optional forced bumps.
 
 - Inputs (selected):
   - `forceBump: 'major'|'minor'|'patch'` or `forceMajor/forceMinor/forcePatch: true`
@@ -60,16 +60,25 @@ Computes a version based on the latest tag and/or `version.txt`, with optional f
   - `cumulativePatch: true` → adds commits since last tag to patch when patch bumping
   - `writeFile: true` (writes `version.txt`), `stateFile: '.semver-state'`
   - `skipOnSameCommit: true` (prevents re-bump on same commit unless forced)
+  - `defaultBump: 'patch'|'none'` (set to `'none'` to require tokens)
+  - `patchToken: '!patch'` (explicit patch bump token)
 
-- Tokens in the last commit message: `!major`, `!minor` (default is patch). `!release` sets `IS_RELEASE` metadata (used to gate a release stage).
+- Tokens in the last commit message: `!major`, `!minor`, optional `!patch`.
+  - If `defaultBump: 'patch'` (default), patch bumps still occur when no token is present.
+  - If `defaultBump: 'none'`, no bump unless a token is present or `force*` is set.
 
 - Returns (selected): `version`, `bump`, `baseVersion`, `baselineSource`, `commitsSinceTag`, `skipped`, `isRelease`, `forcedBump`, `branch`.
 
-Example:
+Example (token-required bumping):
 
 ```groovy
-def v = semver(cumulativePatch: true, tagPattern: 'v[0-9]*')
-echo "Next: ${v.version} (from ${v.baselineSource})"
+def v = semver(defaultBump: 'none')
+```
+
+Example (explicit patch token):
+
+```groovy
+def v = semver(defaultBump: 'none', patchToken: '!patch')
 ```
 
 ## release

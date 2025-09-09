@@ -6,7 +6,8 @@
 // Tokens in last commit message:
 //   !major  -> bump major
 //   !minor  -> bump minor
-//   (else)  -> bump patch
+//   !patch  -> bump patch (configurable)
+//   (else)  -> defaultBump ('patch' by default; set to 'none' to require tokens)
 //
 // Strategy:
 //   - 'file' : baseline from version.txt only
@@ -24,6 +25,7 @@ def call(Map cfg = [:]) {
   final String  versionFile        = (cfg.versionFile ?: 'version.txt') as String
   final String  majorToken         = (cfg.majorToken  ?: '!major') as String
   final String  minorToken         = (cfg.minorToken  ?: '!minor') as String
+  final String  patchToken         = (cfg.patchToken  ?: '!patch') as String
   final String  strategy           = (cfg.strategy ?: 'tag') as String              // 'tag' | 'file'
   final boolean strictTagBaseline  = (cfg.strictTagBaseline == true)               // if true: ignore version.txt for baseline
   final boolean cumulativePatch    = (cfg.cumulativePatch == true)
@@ -31,6 +33,7 @@ def call(Map cfg = [:]) {
   final String  tagMode            = (cfg.tagMode ?: 'nearest') as String          // 'nearest' | 'latest'
   final boolean writeFileOut       = (cfg.writeFile == false) ? false : true
   final String  stateFile          = (cfg.stateFile ?: '.semver-state') as String
+  final String  defaultBump        = ((cfg.defaultBump ?: 'patch') as String).toLowerCase() // 'patch' | 'none'
 
   // Optional forced bumps (overrides tokens)
   String forcedBump = (cfg.forceBump ?: '').toString().toLowerCase()
@@ -124,7 +127,9 @@ def call(Map cfg = [:]) {
     default:
       if (commitMsg.contains(majorToken))      { M++; m = 0; p = 0; bump = 'major' }
       else if (commitMsg.contains(minorToken)) { m++; p = 0; bump = 'minor' }
-      else                                     { p++;         bump = 'patch' }
+      else if (commitMsg.contains(patchToken)) { p++;         bump = 'patch' }
+      else if (defaultBump == 'patch')         { p++;         bump = 'patch' }
+      else                                     {                 bump = 'none'  }
   }
 
   // Optional cumulative patch (only if baseline is a tag and this is a plain patch w/out forced bump)
