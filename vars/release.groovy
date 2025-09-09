@@ -31,8 +31,7 @@ def call(Map cfg = [:]) {
   // Auth / push
   final boolean pushTags           = (cfg.pushTags == false) ? false : true
   final String  credentialsId      = (cfg.credentialsId ?: null) as String
-  // accept both 'owner' and 'ownerHint'
-  final String  ownerHint          = (cfg.owner ?: cfg.ownerHint ?: null) as String
+  final String  ownerHint          = (cfg.owner ?: cfg.ownerHint ?: null) as String  // accept both keys
   final String  gitUserName        = (cfg.gitUserName ?: 'Jenkins CI') as String
   final String  gitUserEmail       = (cfg.gitUserEmail ?: 'jenkins@local') as String
   final boolean debug              = (cfg.debug == true || (binding.hasVariable('params') && params.DEBUG_RELEASE == true))
@@ -200,4 +199,14 @@ private boolean createOrUpdateRelease(String tag, String credentialsId, String a
   String status = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
 
   if (status == '200') {
-    String rid = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag} | sed -n 's/.*\"id\"\\s*:\\s*\\([0-9][0-9]*\\).*/\\1/p' | head -n1",*
+    String rid = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag} | sed -n 's/.*\"id\"\\s*:\\s*\\([0-9][0-9]*\\).*/\\1/p' | head -n1", returnStdout: true).trim()
+    if (rid) {
+      sh """curl -sS -X PATCH ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/${rid} \
+            -d '{"name":"${tag}","draft":${draft},"prerelease":${prerelease}}' >/dev/null"""
+      return true
+    }
+  }
+  sh """curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases \
+        -d '{"tag_name":"${tag}","name":"${tag}","draft":${draft},"prerelease":${prerelease},"generate_release_notes":${genNotes}}' >/dev/null"""
+  return true
+}
