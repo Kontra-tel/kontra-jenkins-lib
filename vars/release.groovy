@@ -3,10 +3,10 @@
 // Creates/pushes a git tag (e.g. vX.Y.Z) and optionally a GitHub Release.
 // Expects `version:` (string). Does NOT compute/bump versions.
 //
-// Behavior gates:
-//   - alwaysTag:true                      -> tag every time
-//   - tagOnRelease:true (default) & commit has '!release' OR forceRelease:true
-//   - onlyTagOnMain:true (default)        -> allow tagging only on releaseBranch
+// Gates:
+//   - alwaysTag:true                     -> tag every time
+//   - tagOnRelease:true & commit has '!release' OR forceRelease:true
+//   - onlyTagOnMain:true                 -> allow tagging only on mainBranch
 //
 // GitHub:
 //   - Provide credentialsId (GitHub App or PAT) to push tags and create releases.
@@ -19,24 +19,25 @@ def call(Map cfg = [:]) {
   String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
 
-  // Core config (provide safe defaults for all referenced symbols)
+  // Core config
   final String  tagPrefix          = (cfg.tagPrefix ?: 'v') as String
   final String  releaseToken       = (cfg.releaseToken ?: '!release') as String
   final boolean tagOnRelease       = (cfg.tagOnRelease == false) ? false : true
-  final boolean forceRelease       = (cfg.forceRelease == true)
+  final boolean forceRelease       = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
   final boolean onlyTagOnMain      = (cfg.onlyTagOnMain == false) ? false : true
-  final String  mainBranch         = (cfg.mainBranch ?: 'main') as String
+  final String  mainBranch         = (cfg.mainBranch ?: cfg.releaseBranch ?: 'main') as String
   final boolean alwaysTag          = (cfg.alwaysTag == true)
 
-  // Lightweight probe without regex (regex caused sandbox PatternSyntax issues under CPS)
-  final boolean pushTags            = (cfg.pushTags == false) ? false : true
-  final String  credentialsId       = (cfg.credentialsId ?: null) as String
-  final String  ownerHint           = (cfg.owner ?: null) as String
-  final String  gitUserName         = (cfg.gitUserName ?: 'Jenkins CI') as String
-  final String  gitUserEmail        = (cfg.gitUserEmail ?: 'jenkins@local') as String
-  final boolean debug               = (cfg.debug == true)
+  // Auth / push
+  final boolean pushTags           = (cfg.pushTags == false) ? false : true
+  final String  credentialsId      = (cfg.credentialsId ?: null) as String
+  // accept both 'owner' and 'ownerHint'
+  final String  ownerHint          = (cfg.owner ?: cfg.ownerHint ?: null) as String
+  final String  gitUserName        = (cfg.gitUserName ?: 'Jenkins CI') as String
+  final String  gitUserEmail       = (cfg.gitUserEmail ?: 'jenkins@local') as String
+  final boolean debug              = (cfg.debug == true || (binding.hasVariable('params') && params.DEBUG_RELEASE == true))
 
-  // GitHub Release
+  // GitHub Release settings
   final boolean createGithubRelease = (cfg.createGithubRelease == true)
   final boolean releaseDraft        = (cfg.releaseDraft == true)
   final boolean prerelease          = (cfg.prerelease == true)
@@ -46,13 +47,10 @@ def call(Map cfg = [:]) {
   // Repo facts
   String commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
   String branch    = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-  if (branch == 'HEAD' || !branch) {
-    branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').trim()
-  }
+  if (branch == 'HEAD' || !branch) branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').trim()
   if (branch?.startsWith('origin/')) branch = branch.replaceFirst('^origin/', '')
   if (!branch || branch == 'HEAD') {
     try {
-      // Safe branch name extraction: line starting with '* ' then remove marker
       String guess = sh(script: "git branch --contains HEAD 2>/dev/null | grep '^* ' | head -n1 | cut -c3- || true", returnStdout: true).trim()
       if (guess) branch = guess
     } catch (Throwable ignore) {}
@@ -61,7 +59,7 @@ def call(Map cfg = [:]) {
 
   String tag = "${tagPrefix}${version}"
 
-  // Decide if we should tag
+  // Should we tag?
   boolean isRelease = forceRelease || (tagOnRelease && commitMsg.contains(releaseToken))
   boolean allowedBr = !onlyTagOnMain || (branch == mainBranch)
   boolean shouldTag = allowedBr && (alwaysTag || isRelease)
@@ -71,9 +69,9 @@ def call(Map cfg = [:]) {
   boolean ghRel  = false
 
   if (shouldTag) {
-  // Ensure git identity (keep simple to avoid CPS parser issues)
-  sh "git config --local user.email '${gitUserEmail}' || true"
-  sh "git config --local user.name  '${gitUserName}'  || true"
+    // Ensure identity
+    sh "git config --local user.email '${gitUserEmail}' || true"
+    sh "git config --local user.name  '${gitUserName}'  || true"
 
     if (tagAlreadyExists(tag)) {
       echo "release: tag ${tag} already exists; skipping creation"
@@ -84,8 +82,7 @@ def call(Map cfg = [:]) {
     }
 
     if (pushTags) {
-      pushTag(tag, credentialsId, ownerHint, githubApi, debug)
-      pushed = true
+      pushed = pushTag(tag, credentialsId, ownerHint, githubApi, debug)
     }
 
     if (createGithubRelease && credentialsId) {
@@ -117,7 +114,7 @@ private Map detectOwnerRepo(String originUrl) {
 
 private String resolveGithubToken(String credentialsId, String ownerHint) {
   if (!credentialsId) return null
-  // Try GitHub App token (requires GitHub Branch Source plugin and an installed App)
+  // GitHub App (Branch Source plugin)
   try {
     if (ownerHint) return githubAppToken(credentialsId: credentialsId, owner: ownerHint)
     return githubAppToken(credentialsId: credentialsId)
@@ -141,11 +138,7 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
   return null
 }
 
-/**
- * Preflight probe: does this token SEE the repo and have push permission?
- * Returns [code: "200"/..., push: true|false]
- */
-private void pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
+private boolean pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
   Map or = detectOwnerRepo(origin)
   String httpsRepo = origin
@@ -153,46 +146,44 @@ private void pushTag(String tag, String credentialsId, String ownerHint, String 
     .replaceFirst(/^https:\/\/[^@]+@github\.com\//, 'https://github.com/')
 
   String token = resolveGithubToken(credentialsId, ownerHint ?: or.owner)
+  String obf = token ? (token.startsWith('gh') ? token.substring(0, token.indexOf('_') > 0 ? token.indexOf('_')+1 : Math.min(6, token.length())) + '…' : '***') : 'none'
+
   if (debug) {
-    String tokPrefix = token ? (token.length() >= 4 ? token.substring(0, token.indexOf('_') > 0 ? token.indexOf('_')+1 : Math.min(4, token.length())) : 'tok') : 'none'
-    echo "release: pushTag origin=${httpsRepo} tokenType=${tokPrefix} hasToken=${token ? 'yes' : 'no'} credId=${credentialsId ?: 'none'} repo=${or.owner}/${or.repo}"
+    echo "release: pushTag repo=${or.owner}/${or.repo} credId=${credentialsId ?: 'none'} token=${obf}"
+    // Probe permissions (helpful when 403)
+    try {
+      String permJson = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${or.owner}/${or.repo}", returnStdout: true).trim()
+      echo "release: repo perms snippet: ${permJson.replaceAll(/\\s+/,' ').take(200)}…"
+      String rules = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' '${apiBase}/repos/${or.owner}/${or.repo}/rulesets?target=tag'", returnStdout: true).trim()
+      echo "release: tag rulesets present: ${rules ? rules.replaceAll(/\\s+/,' ').take(200)+'…' : 'none'}"
+    } catch (Throwable ignore) { echo 'release: permission/ruleset probe failed (ignored)' }
   }
 
   if (!token) {
-    // Fall back to agent’s native auth (deploy key, cached creds, etc.)
+    // No token supplied: try agent’s auth (deploy key, cached creds)
     int rc = sh(script: "git push origin ${tag}", returnStatus: true)
     if (rc != 0) {
-      echo "release: push failed (status=${rc}) without token. Ensure Jenkins has push rights (deploy key with write or PAT)."
+      echo "release: push failed (status=${rc}) without token. Configure a PAT or GitHub App credential with write + ruleset bypass."
       error "release: git push failed (no token)"
     }
-    return
+    return true
   }
 
+  // Embed token directly into the remote URL (reliable for PATs and App installation tokens)
+  String hostPath = httpsRepo.replaceFirst(/^https:\\/\\//, '')
+  int rc = sh(script: """
+    set -e
+    git remote set-url origin https://x-access-token:${token}@${hostPath}
+    GIT_CURL_VERBOSE=${debug ? 1 : 0} git push origin ${tag}
+  """.stripIndent(), returnStatus: true)
 
-  // Optional lightweight permission probe (no regex) to help debug 403s
-  if (debug) {
-    try {
-      String permJson = sh(script: "curl -s -H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' ${apiBase}/repos/${or.owner}/${or.repo}", returnStdout: true).trim()
-      boolean hasPush = permJson.contains('"push": true')
-      boolean hasAdmin = permJson.contains('"admin": true')
-      echo "release: permissions repo=${or.owner}/${or.repo} push=${hasPush} admin=${hasAdmin}"
-    } catch (Throwable ignore) { echo 'release: permission probe failed (ignored)' }
+  if (rc != 0) {
+    echo "release: push failed (status=${rc}). This is typically either:"
+    echo " - token lacks Contents: write on ${or.owner}/${or.repo}, or"
+    echo " - a tag ruleset protects '${tag}' and your actor (App/user) is not on the bypass list."
+    error "release: git push failed"
   }
-
-  // Use token for HTTPS push (GitHub App installation tokens & PATs): username must be 'x-access-token' and password is the token.
-  writeFile file: 'git-askpass.sh', text: '#!/bin/sh\necho "$GITHUB_TOKEN"\n'
-  sh 'chmod 700 git-askpass.sh'
-  def ask = "${pwd()}/git-askpass.sh"
-  withEnv(["GIT_ASKPASS=${ask}", "GITHUB_TOKEN=${token}"]) {
-    int rc = sh(script: """
-       git remote set-url origin https://x-access-token@${httpsRepo.replaceFirst(/^https:\\/\\//,'')}
-       GIT_CURL_VERBOSE=${debug ? 1 : 0} git push origin ${tag}
-    """.stripIndent(), returnStatus: true)
-    if (rc != 0) {
-      echo "release: push failed (status=${rc}). Token may lack permissions or protected tags block creation."
-      error "release: git push failed"
-    }
-  }
+  return true
 }
 
 private boolean createOrUpdateRelease(String tag, String credentialsId, String apiBase, boolean draft, boolean prerelease, boolean genNotes) {
@@ -209,14 +200,4 @@ private boolean createOrUpdateRelease(String tag, String credentialsId, String a
   String status = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
 
   if (status == '200') {
-    String rid = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag} | sed -n 's/.*\"id\"\\s*:\\s*\\([0-9][0-9]*\\).*/\\1/p' | head -n1", returnStdout: true).trim()
-    if (rid) {
-      sh """curl -sS -X PATCH ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/${rid} \
-            -d '{"name":"${tag}","draft":${draft},"prerelease":${prerelease}}' >/dev/null"""
-      return true
-    }
-  }
-  sh """curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases \
-        -d '{"tag_name":"${tag}","name":"${tag}","draft":${draft},"prerelease":${prerelease},"generate_release_notes":${genNotes}}' >/dev/null"""
-  return true
-}
+    String rid = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag} | sed -n 's/.*\"id\"\\s*:\\s*\\([0-9][0-9]*\\).*/\\1/p' | head -n1",*
