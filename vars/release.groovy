@@ -1,220 +1,279 @@
 // vars/release.groovy
 //
-// Minimal tag + GitHub Release step (prefers GitHub App credentials).
-// - Gates tagging by: alwaysTag OR (!release / forceRelease), plus onlyTagOnMain.
-// - Creates annotated tag and pushes it using a GitHub App installation token (ghs_*), or PAT fallback.
-// - Creates/updates a GitHub Release; by default includes "notes since previous tag".
+// Creates/pushes a git tag (e.g. vX.Y.Z) and optionally a GitHub Release.
+// Expects `version:` (string). Does NOT compute/bump versions.
 //
-// Inputs (common):
-//   version                : String (required if env.BUILD_VERSION not set)
-//   tagPrefix              : default 'v'
-//   releaseToken           : default '!release'
-//   tagOnRelease           : default true
-//   forceRelease           : default false
-//   alwaysTag              : default false
-//   onlyTagOnMain          : default true
-//   releaseBranch          : default 'main'
-//   gitUserName/gitUserEmail: identity for tag annotation
+// Tagging gates (independent of GH Release):
+//   - alwaysTag:true                      -> tag every time
+//   - tagOnRelease:true (default) & commit has '!release' OR forceRelease:true
+//   - onlyTagOnMain:true (default)        -> allow tagging only on releaseBranch
 //
-// GitHub:
-//   credentialsId          : Jenkins credential (GitHub App recommended)  <-- IMPORTANT
-//   owner                  : org/user hint for githubAppToken (optional but recommended for org repos)
-//   createGithubRelease    : default false
-//   releaseDraft           : default false
-//   prerelease             : default false
-//   notesSinceLastTag      : default true  (compose body from git log)
-//   generateReleaseNotes   : default true  (let GitHub auto-generate when no body provided)
-//   githubApi              : default 'https://api.github.com'
+// GitHub Release will be created when ALL are true:
+//   - credentialsId provided (GitHub App or PAT) AND
+//   - not explicitly suppressed by '!no-ghrelease' AND
+//   - any of:
+//       * cfg.createGithubRelease == true
+//       * commit message contains '!ghrelease'
+//       * cfg.forceGithubRelease == true  OR env.FORCE_GH_RELEASE == 'true'
 //
-// Returns: [tag, tagged, pushed, githubReleased, branch, releaseUrl]
-
+// Additionally, if a GH Release is requested, this step ensures the tag exists
+// (respecting branch gate) and pushes it before creating/updating the release.
+//
+// Returns: [tag, tagged, pushed, githubReleased, isRelease, ghReleaseRequested, branch]
+//
 def call(Map cfg = [:]) {
-  // ----- Inputs & defaults
-  final String version       = (cfg.version ?: env.BUILD_VERSION ?: '').trim()
+  // Required
+  String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
 
-  final String tagPrefix     = (cfg.tagPrefix ?: 'v') as String
-  final String tag           = "${tagPrefix}${version}"
+  // Core config (provide safe defaults for all referenced symbols)
+  final String  tagPrefix          = (cfg.tagPrefix ?: 'v') as String
+  final String  releaseToken       = (cfg.releaseToken ?: '!release') as String
+  final boolean tagOnRelease       = (cfg.tagOnRelease == false) ? false : true
+  final boolean forceRelease       = (cfg.forceRelease == true)
+  final boolean onlyTagOnMain      = (cfg.onlyTagOnMain == false) ? false : true
+  final String  mainBranch         = (cfg.releaseBranch ?: cfg.mainBranch ?: 'main') as String
+  final boolean alwaysTag          = (cfg.alwaysTag == true)
 
-  final boolean forceRelease = (cfg.forceRelease == true || env.FORCE_RELEASE == 'true')
-  final boolean tagOnRelease = (cfg.tagOnRelease != false)
-  final String  releaseToken = (cfg.releaseToken ?: '!release') as String
-  final boolean alwaysTag    = (cfg.alwaysTag == true)
+  // New: GH release tokens and flags
+  final String  ghReleaseToken       = (cfg.ghReleaseToken ?: '!ghrelease') as String
+  final String  ghReleaseNoToken     = (cfg.noGhReleaseToken ?: '!no-ghrelease') as String
+  final boolean createGithubRelease  = (cfg.createGithubRelease == true)
+  final boolean forceGithubRelease   = (cfg.forceGithubRelease == true) || (env.FORCE_GH_RELEASE == 'true')
 
-  final boolean onlyTagOnMain = (cfg.onlyTagOnMain != false)
-  final String  mainBranch    = (cfg.releaseBranch ?: 'main') as String
-
-  final String  gitUserName   = (cfg.gitUserName ?: 'Jenkins CI') as String
-  final String  gitUserEmail  = (cfg.gitUserEmail ?: 'jenkins@local') as String
-
-  // GitHub knobs
+  // Lightweight probe / connectivity
+  final boolean pushTags            = (cfg.pushTags == false) ? false : true
   final String  credentialsId       = (cfg.credentialsId ?: null) as String
   final String  ownerHint           = (cfg.owner ?: null) as String
-  final boolean createGithubRelease = (cfg.createGithubRelease == true)
+  final String  gitUserName         = (cfg.gitUserName ?: 'Jenkins CI') as String
+  final String  gitUserEmail        = (cfg.gitUserEmail ?: 'jenkins@local') as String
+  final boolean debug               = (cfg.debug == true)
+
+  // GitHub Release details
   final boolean releaseDraft        = (cfg.releaseDraft == true)
   final boolean prerelease          = (cfg.prerelease == true)
-  final boolean notesSinceLastTag   = (cfg.notesSinceLastTag != false) // default: true
-  final boolean autoGenNotes        = (cfg.generateReleaseNotes == true)
+  final boolean generateNotesFlag   = (cfg.generateReleaseNotes == true)   // API "generate_release_notes"
+  final boolean attachCommitNotes   = (cfg.attachCommitNotes != false)     // our simple commit list (default on)
+  final String  notesHeader         = (cfg.releaseNotesHeader ?: 'Changes since last release:') as String
   final String  githubApi           = (cfg.githubApi ?: 'https://api.github.com') as String
 
-  // ----- Repo facts
-  sh "git fetch --tags --force --prune || true"
+  // Repo facts
   String commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
   String branch    = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-  if (!branch || branch == 'HEAD') {
-    branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: mainBranch).trim()
+  if (branch == 'HEAD' || !branch) {
+    branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: '').trim()
   }
+  if (branch?.startsWith('origin/')) branch = branch.replaceFirst('^origin/', '')
+  if (!branch || branch == 'HEAD') {
+    try {
+      String guess = sh(script: "git branch --contains HEAD 2>/dev/null | grep '^* ' | head -n1 | cut -c3- || true", returnStdout: true).trim()
+      if (guess) branch = guess
+    } catch (Throwable ignore) {}
+  }
+  if (!branch) branch = mainBranch
 
-  // ----- Should we tag?
-  boolean isRelease = forceRelease || (tagOnRelease && commitMsg.contains(releaseToken))
-  boolean allowedBr = !onlyTagOnMain || (branch == mainBranch)
-  boolean shouldTag = allowedBr && (alwaysTag || isRelease)
+  String tag       = "${tagPrefix}${version}"
+
+  // Decide if we should tag
+  boolean isRelease   = forceRelease || (tagOnRelease && commitMsg.contains(releaseToken))
+  boolean allowedBr   = !onlyTagOnMain || (branch == mainBranch)
+  boolean shouldTag   = allowedBr && (alwaysTag || isRelease)
+
+  // Decide if we should make a GitHub Release
+  boolean wantsGhByToken = commitMsg.contains(ghReleaseToken)
+  boolean noGhByToken    = commitMsg.contains(ghReleaseNoToken)
+  boolean ghReleaseRequested = !noGhByToken && (createGithubRelease || wantsGhByToken || forceGithubRelease)
 
   boolean tagged = false
   boolean pushed = false
   boolean ghRel  = false
-  String  ghReleaseUrl = ''
 
-  // Ensure identity for local tag
-  sh "git config --local user.email '${gitUserEmail}' || true"
-  sh "git config --local user.name  '${gitUserName}'  || true"
+  // If a GH release is requested, ensure there is a tag (respect branch gate).
+  boolean ensureTag = shouldTag || (ghReleaseRequested && allowedBr)
 
-  // ----- Tag + push
-  if (shouldTag) {
-    if (!tagExistsLocal(tag)) {
-      sh "git tag -a ${tag} -m 'Release ${tag}'"
-    }
-    tagged = true
+  if (ensureTag) {
+    // git identity
+    sh "git config --local user.email '${gitUserEmail}' || true"
+    sh "git config --local user.name  '${gitUserName}'  || true"
 
-    // Prefer GitHub App token; fallback to PAT/Secret Text
-    if (credentialsId) {
-      String token = resolveTokenPreferApp(credentialsId, ownerHint)
-      int rc = pushTagWithToken(tag, token)
-      if (rc != 0) error "release: git push failed (status=${rc})"
-      pushed = true
+    if (tagAlreadyExists(tag)) {
+      echo "release: tag ${tag} already exists locally; skipping creation"
+      tagged = true
     } else {
-      int rc = sh(script: "git push origin ${tag}", returnStatus: true)
-      if (rc != 0) error "release: git push failed (status=${rc})"
+      sh "git tag -a ${tag} -m 'Release ${tag}'"
+      tagged = true
+    }
+
+    if (pushTags) {
+      pushTag(tag, credentialsId, ownerHint, githubApi, debug)
       pushed = true
     }
   } else {
-    echo "release: tagging gated off → branch=${branch}, onlyTagOnMain=${onlyTagOnMain}, alwaysTag=${alwaysTag}, isRelease=${isRelease}"
+    echo "release: tag creation gated off → branch=${branch} onlyTagOnMain=${onlyTagOnMain} alwaysTag=${alwaysTag} isRelease=${isRelease}"
   }
 
-  // ----- GitHub Release (works whether tag existed already or we just created it)
-  if (createGithubRelease && credentialsId) {
-    def or = detectOwnerRepo(sh(script: 'git config --get remote.origin.url', returnStdout: true).trim())
-    String body = ''
-    if (notesSinceLastTag) {
-      String prev = previousTagLike(tagPrefix, tag)
-      if (prev) body = notesBetween(prev, tag, or.owner, or.repo)
-    }
-    String apiToken = resolveTokenPreferApp(credentialsId, ownerHint ?: or.owner)
-    def rel = upsertRelease(or.owner, or.repo, tag, body, releaseDraft, prerelease, body ? false : autoGenNotes, apiToken, githubApi)
-    ghRel = rel.ok
-    ghReleaseUrl = rel.url ?: ''
+  if (ghReleaseRequested && credentialsId) {
+    ghRel = createOrUpdateRelease(
+      tag, credentialsId, githubApi,
+      releaseDraft, prerelease,
+      generateNotesFlag, attachCommitNotes, notesHeader, tagPrefix
+    )
+  } else if (ghReleaseRequested && !credentialsId) {
+    echo "release: GitHub release requested but no credentialsId provided — skipping GH Release"
   }
 
-  return [tag: tag, tagged: tagged, pushed: pushed, githubReleased: ghRel, branch: branch, releaseUrl: ghReleaseUrl]
+  return [
+    tag                : tag,
+    tagged             : tagged,
+    pushed             : pushed,
+    githubReleased     : ghRel,
+    isRelease          : isRelease,
+    ghReleaseRequested : ghReleaseRequested,
+    branch             : branch
+  ]
 }
 
-// ===== helpers =====
+// ---------- helpers ----------
 
-private boolean tagExistsLocal(String tag) {
+private boolean tagAlreadyExists(String tag) {
   return (sh(script: "git rev-parse -q --verify refs/tags/${tag}", returnStatus: true) == 0)
 }
 
 private Map detectOwnerRepo(String originUrl) {
-  String url = (originUrl ?: '').replaceAll(/\.git$/, '')
-  if (url.startsWith('git@github.com:')) url = 'https://github.com/' + url.substring('git@github.com:'.length())
+  String url = originUrl ?: ''
+  url = url.replaceAll(/\.git$/, '')
+  if (url.startsWith('git@github.com:')) {
+    url = 'https://github.com/' + url.substring('git@github.com:'.length())
+  }
   def m = (url =~ /github\.com\/([^\/]+)\/([^\/]+)$/)
-  return m.find() ? [owner: m.group(1), repo: m.group(2)] : [owner: '', repo: '']
+  if (m.find()) return [owner: m.group(1), repo: m.group(2)]
+  return [owner: '', repo: '']
 }
 
-/** Prefer GitHub App installation token; fallback to PAT/Secret Text/UsernamePassword. */
-private String resolveTokenPreferApp(String credentialsId, String ownerHint = null) {
-  // 1) GitHub App installation token
+private String resolveGithubToken(String credentialsId, String ownerHint) {
+  if (!credentialsId) return null
+  // Try GitHub App token (requires GitHub Branch Source plugin + installed App)
   try {
     if (ownerHint) return githubAppToken(credentialsId: credentialsId, owner: ownerHint)
     return githubAppToken(credentialsId: credentialsId)
   } catch (Throwable ignore) {}
-  // 2) Secret Text (PAT)
+  // Secret Text (PAT)
   try {
-    def tok = null
-    withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN_TMP')]) { tok = env.GITHUB_TOKEN_TMP }
-    if (tok) return tok
+    def token = null
+    withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN_TMP')]) {
+      token = env.GITHUB_TOKEN_TMP
+    }
+    if (token) return token
   } catch (Throwable ignore) {}
-  // 3) Username/Password → use password as token
+  // Username/Password (use password as token)
   try {
     def tok = null
-    withCredentials([usernamePassword(credentialsId: credentialsId, usernameVariable: 'GITHUB_USER_TMP', passwordVariable: 'GITHUB_PASS_TMP')]) { tok = env.GITHUB_PASS_TMP }
+    withCredentials([usernamePassword(credentialsId: credentialsId, usernameVariable: 'GITHUB_USER_TMP', passwordVariable: 'GITHUB_PASS_TMP')]) {
+      tok = env.GITHUB_PASS_TMP
+    }
     if (tok) return tok
   } catch (Throwable ignore) {}
   return null
 }
 
-/** Push the tag using HTTPS with 'x-access-token' as username and token as password. */
-private int pushTagWithToken(String tag, String token) {
-  if (!token) return 128
+private void pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+  Map or = detectOwnerRepo(origin)
   String httpsRepo = origin
-      .replaceFirst(/^git@github\.com:/, 'https://github.com/')
-      .replaceFirst(/^https:\/\/[^@]+@github\.com\//, 'https://github.com/')
-  return sh(script: """
-    set -e
-    git remote set-url origin https://x-access-token:${token}@${httpsRepo.replaceFirst(/^https:\\/\\//,'')}
-    git push origin ${tag}
-  """.stripIndent(), returnStatus: true)
-}
+    .replaceFirst(/^git@github\.com:/, 'https://github.com/')
+    .replaceFirst(/^https:\/\/[^@]+@github\.com\//, 'https://github.com/')
 
-private String previousTagLike(String prefix, String currentTag) {
-  String prev = sh(script: "git describe --tags --abbrev=0 --match '${prefix}[0-9]*' --exclude '${currentTag}' 2>/dev/null || true", returnStdout: true).trim()
-  if (prev) return prev
-  String list = sh(script: "git -c versionsort.suffix=- tag -l '${prefix}[0-9]*' --sort=-v:refname", returnStdout: true).trim()
-  def tags = list.readLines().findAll { it != currentTag }
-  return tags ? tags[0].trim() : ''
-}
-
-private String notesBetween(String fromTag, String toTag, String owner, String repo) {
-  String log = sh(script: "git log --no-merges --format='%h%x09%an%x09%s' ${fromTag}..${toTag} || true", returnStdout: true).trim()
-  if (!log) return "No changes.\n\n[Compare ${fromTag}...${toTag}](https://github.com/${owner}/${repo}/compare/${fromTag}...${toTag})"
-  def lines = log.readLines().collect { ln ->
-    def p = ln.split('\\t', 3)
-    (p.size() == 3) ? "- ${p[2]} (`${p[0]}` by ${p[1]})" : "- ${ln}"
-  }
-  return "### Changes since ${fromTag}\n\n${lines.join('\n')}\n\n[Compare ${fromTag}...${toTag}](https://github.com/${owner}/${repo}/compare/${fromTag}...${toTag})"
-}
-
-/** Create or update a GitHub Release for the tag. */
-private Map upsertRelease(String owner, String repo, String tag, String body, boolean draft, boolean prerelease, boolean genNotes, String token, String apiBase) {
-  if (!owner || !repo) { echo "release: owner/repo not detected; skip GitHub Release"; return [ok:false] }
-  if (!token)          { echo "release: no token; skip GitHub Release"; return [ok:false] }
-
-  String H = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json'"
-
-  // If exists → PATCH
-  String rc = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${H} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
-  if (rc == '200') {
-    String json = sh(script: "curl -s ${H} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
-    String id   = json.replaceAll('.*\"id\"\\s*:\\s*([0-9]+).*', '$1')
-    String url  = json.replaceAll('.*\"html_url\"\\s*:\\s*\"([^\"]+)\".*', '$1')
-    String payload = body ? "{\"name\":\"${tag}\",\"body\":${toJson(body)},\"draft\":${draft},\"prerelease\":${prerelease}}"
-                          : "{\"name\":\"${tag}\",\"draft\":${draft},\"prerelease\":${prerelease}}"
-    sh "curl -sS -X PATCH ${H} ${apiBase}/repos/${owner}/${repo}/releases/${id} -d '${payload}' >/dev/null"
-    return [ok:true, url:url]
+  String token = resolveGithubToken(credentialsId, ownerHint ?: or.owner)
+  if (debug) {
+    String prefix = token ? token.substring(0, Math.min(7, token.length())) + '…' : 'none'
+    echo "release: pushTag repo=${or.owner}/${or.repo} credId=${credentialsId ?: 'none'} token=${prefix}"
   }
 
-  // Create
-  String target = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
-  String payload = body
-    ? "{\"tag_name\":\"${tag}\",\"target_commitish\":\"${target}\",\"name\":\"${tag}\",\"body\":${toJson(body)},\"draft\":${draft},\"prerelease\":${prerelease},\"generate_release_notes\":false}"
-    : "{\"tag_name\":\"${tag}\",\"target_commitish\":\"${target}\",\"name\":\"${tag}\",\"draft\":${draft},\"prerelease\":${prerelease},\"generate_release_notes\":${genNotes}}"
+  if (!token) {
+    int rc = sh(script: "git push origin ${tag}", returnStatus: true)
+    if (rc != 0) {
+      echo "release: push failed (status=${rc}) without token. Ensure Jenkins has push rights (deploy key with write or PAT)."
+      error "release: git push failed (no token)"
+    }
+    return
+  }
 
-  String resp = sh(script: "curl -sS -X POST ${H} ${apiBase}/repos/${owner}/${repo}/releases -d '${payload}'", returnStdout: true).trim()
-  String url  = resp.replaceAll('.*\"html_url\"\\s*:\\s*\"([^\"]+)\".*', '$1')
-  return [ok: resp.contains('\"id\"') && url, url: url]
+  // HTTPS push with App/PAT token
+  writeFile file: 'git-askpass.sh', text: '#!/bin/sh\necho "$GITHUB_TOKEN"\n'
+  sh 'chmod 700 git-askpass.sh'
+  def ask = "${pwd()}/git-askpass.sh"
+  withEnv(["GIT_ASKPASS=${ask}", "GITHUB_TOKEN=${token}"]) {
+    int rc = sh(script: """
+       set -e
+       git remote set-url origin https://x-access-token:${token}@${httpsRepo.replaceFirst(/^https:\\/\\//,'')}
+       GIT_CURL_VERBOSE=${debug ? 1 : 0} git push origin ${tag}
+    """.stripIndent(), returnStatus: true)
+    if (rc != 0) {
+      echo "release: push failed (status=${rc}). Token may lack permissions or protected tags block creation."
+      error "release: git push failed"
+    }
+  }
 }
 
-private String toJson(String s) {
-  '"' + (s ?: '').replace('\\','\\\\').replace('"','\\"').replace('\n','\\n') + '"'
+private boolean createOrUpdateRelease(
+  String tag, String credentialsId, String apiBase,
+  boolean draft, boolean prerelease,
+  boolean generateNotesFlag, boolean attachCommitNotes, String notesHeader, String tagPrefix
+) {
+  String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+  Map or = detectOwnerRepo(origin)
+  String owner = or.owner
+  String repo  = or.repo
+  if (!owner || !repo) { echo "release: owner/repo not detected from origin; skipping GitHub Release"; return false }
+
+  String token = resolveGithubToken(credentialsId, owner)
+  if (!token) { echo "release: no GitHub token; skipping GitHub Release"; return false }
+
+  // Build "since last release" notes if requested
+  String headSha = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+  String prevTag = sh(
+    script: "git -c versionsort.suffix=- tag -l '${tagPrefix}[0-9]*' --sort=-v:refname | sed -n '2p' || true",
+    returnStdout: true
+  ).trim()
+  String commitRange = prevTag ? "${prevTag}..HEAD" : ""
+  String changes = commitRange ? sh(
+    script: "git log --no-merges --pretty='- %s (%h)' ${commitRange}",
+    returnStdout: true
+  ).trim() : ""
+  String body = ""
+  if (attachCommitNotes) {
+    String header = prevTag ? "${notesHeader} (${prevTag} → ${tag})" : "${notesHeader}"
+    body = header + "\\n\\n" + (changes ? changes : "- (no user-visible changes)")
+  }
+
+  // If we craft a body, we cannot ALSO ask GitHub to auto-generate notes.
+  boolean useGenerateNotes = generateNotesFlag && !attachCommitNotes
+
+  String hdrs = "-H \"Authorization: Bearer ${token}\" -H \"Accept: application/vnd.github+json\" -H \"Content-Type: application/json\""
+
+  // Does a release already exist for this tag?
+  String status = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
+
+  if (status == '200') {
+    // Update existing release (e.g., switch draft flag, body, etc.)
+    String rid = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag} | sed -n 's/.*\"id\"\\s*:\\s*\\([0-9][0-9]*\\).*/\\1/p' | head -n1", returnStdout: true).trim()
+    if (rid) {
+      // Escape body for JSON
+      String bodyJson = body.replace("\\","\\\\").replace("\"","\\\"")
+      sh """
+        curl -sS -X PATCH ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/${rid} \
+          -d "{\\"name\\":\\"${tag}\\",\\"draft\\":${draft},\\"prerelease\\":${prerelease}${attachCommitNotes ? ',\\"body\\":\\"' + bodyJson + '\\"' : ''}}" >/dev/null
+      """
+      return true
+    }
+  }
+
+  // Create new release (GitHub will create tag if missing when target_commitish provided)
+  String bodyPart = attachCommitNotes ? ",\\"body\\":\\"${body.replace("\\","\\\\").replace("\"","\\\"")}\\"" : ""
+  String genNotesPart = useGenerateNotes ? ",\\"generate_release_notes\\":true" : ""
+  sh """
+    curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases \
+      -d "{\\"tag_name\\":\\"${tag}\\",\\"name\\":\\"${tag}\\",\\"draft\\":${draft},\\"prerelease\\":${prerelease}${genNotesPart}${bodyPart},\\"target_commitish\\":\\"${headSha}\\"}" >/dev/null
+  """
+  return true
 }

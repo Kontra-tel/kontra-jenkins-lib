@@ -7,6 +7,12 @@ def call(Map cfg = [:]) {
     def desc         = cfg.description ?: "Service ${service}"
     def workingDir   = cfg.workingDir ?: "/opt/${service}"
     def envFile      = cfg.envFile    ?: null
+    // If a repo-provided launch script exists, we will stage it and use it by default
+    def repoLaunchScript = cfg.repoLaunchScript ?: 'launch.sh'
+    // Optional: high-level start command → will be written to a launch script and used for ExecStart
+    def startCommand = cfg.startCommand ?: null
+    def launchScriptName = cfg.launchScriptName ?: 'launch.sh'
+    def launchScriptPath = cfg.launchScriptPath ?: "${workingDir}/${launchScriptName}"
     def execStartCfg = cfg.execStart  ?: null     // if provided, used as-is
     def jarPath      = cfg.jarPath    ?: null     // OR
     def artifactGlob = cfg.artifactGlob ?: null   // copy latest build artifact
@@ -42,17 +48,69 @@ def call(Map cfg = [:]) {
         echo "deploySystemd: ${dryRun ? 'would deploy' : 'deployed'} artifact -> ${deployedJar} (from ${latest})"
     }
 
+    // Optionally stage a repo launch.sh into workingDir (generic projects)
+    String launchScriptWrittenPath = null
+    String launchScriptContent = null
+    if (!startCommand && fileExists(repoLaunchScript)) {
+        if (dryRun) {
+            launchScriptWrittenPath = launchScriptPath
+            try { launchScriptContent = readFile(file: repoLaunchScript) } catch (Throwable ignore) {}
+            echo "deploySystemd(dryRun): would install repo launch script '${repoLaunchScript}' -> ${launchScriptPath}"
+        } else {
+            sh "${sudo}mkdir -p '${workingDir}'"
+            if (useSudo) {
+                sh "${sudo}install -m 755 '${repoLaunchScript}' '${launchScriptPath}'"
+            } else {
+                sh "install -m 755 '${repoLaunchScript}' '${launchScriptPath}'"
+            }
+            launchScriptWrittenPath = launchScriptPath
+            echo "deploySystemd: installed repo launch script -> ${launchScriptWrittenPath}"
+        }
+    }
+
+    // Optionally create a launch script from startCommand
+    // (this takes precedence over a repo launch.sh if both are provided)
+    if (startCommand) {
+        String script = """#!/usr/bin/env bash
+set -euo pipefail
+${startCommand}
+"""
+        if (dryRun) {
+            launchScriptWrittenPath = launchScriptPath
+            launchScriptContent = script
+            echo "deploySystemd(dryRun): would write launch script -> ${launchScriptPath}"
+        } else {
+            // ensure working directory exists before installing the script
+            sh "${sudo}mkdir -p '${workingDir}'"
+            def tmp = ".tmp.${service}.launch.sh"
+            writeFile file: tmp, text: script
+            if (useSudo) {
+                sh "${sudo}install -m 755 '${tmp}' '${launchScriptPath}'"
+            } else {
+                sh "install -m 755 '${tmp}' '${launchScriptPath}'"
+            }
+            sh "rm -f '${tmp}'"
+            launchScriptWrittenPath = launchScriptPath
+            echo "deploySystemd: wrote launch script -> ${launchScriptWrittenPath}"
+        }
+    }
+
     // compute ExecStart (may depend on deployedJar)
     def execStart = execStartCfg
     if (!execStart) {
-        def jarToRun = deployedJar ?: jarPath ?: "${targetDir}/${targetName}"
-        List<String> parts = []
-        parts << javaBin
-        if (javaOpts?.trim()) { parts << javaOpts.trim() }
-        parts << '-jar'
-        parts << jarToRun
-        if (appArgs?.trim()) { parts << appArgs.trim() }
-        execStart = parts.join(' ')
+    if (startCommand || launchScriptWrittenPath) {
+            // Run the generated launch script through bash -lc to allow shell features
+            execStart = "/usr/bin/env bash -lc '${launchScriptPath}'"
+        } else {
+            def jarToRun = deployedJar ?: jarPath ?: "${targetDir}/${targetName}"
+            List<String> parts = []
+            parts << javaBin
+            if (javaOpts?.trim()) { parts << javaOpts.trim() }
+            parts << '-jar'
+            parts << jarToRun
+            if (appArgs?.trim()) { parts << appArgs.trim() }
+            execStart = parts.join(' ')
+        }
     }
 
     // Optionally (re)install the unit
@@ -135,6 +193,8 @@ def call(Map cfg = [:]) {
         unitContent  : unitContent,
         deployedJar  : deployedJar,
         execStart    : execStart,
+    launchScript : launchScriptWrittenPath,
+    launchScriptContent: launchScriptContent,
         restarted    : !dryRun
     ]
 }
