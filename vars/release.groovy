@@ -243,7 +243,8 @@ private boolean createOrUpdateRelease(
   String body = ""
   if (attachCommitNotes) {
     String header = prevTag ? "${notesHeader} (${prevTag} → ${tag})" : "${notesHeader}"
-    body = header + "\\n\\n" + (changes ? changes : "- (no user-visible changes)")
+    // Use real newlines so GitHub renders the list correctly
+    body = header + "\n\n" + (changes ? changes : "- (no user-visible changes)")
   }
 
   // If we craft a body, we cannot ALSO ask GitHub to auto-generate notes.

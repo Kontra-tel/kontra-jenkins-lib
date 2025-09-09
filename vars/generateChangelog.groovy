@@ -69,8 +69,12 @@ def call(Map cfg = [:]) {
     for (Map e : commits) {
         String h = (e.hash ?: '')
         String shortH = h.length() >= 7 ? h.substring(0, 7) : h
-        String link = repoUrl ? "[[${shortH}](${repoUrl}/commit/${h})]" : "[${shortH}]"
-        block.append("- ").append(e.summary ?: '').append(' ').append(link).append('\n')
+        String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
+        block.append("- ")
+             .append(e.summary ?: '')
+             .append(' ')
+             .append('(').append(link).append(')')
+             .append('\n')
         if (e.author) authors.add(e.author)
     }
     block.append("\n### Authors:\n")

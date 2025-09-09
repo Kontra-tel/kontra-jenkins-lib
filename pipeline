@@ -30,7 +30,7 @@ pipeline {
     string      (name: 'RELEASE_BRANCH',       defaultValue: 'main', description: 'Branch where tagging is allowed when ONLY_TAG_ON_MAIN=true')
 
     // GitHub integration (for release step)
-    booleanParam(name: 'CREATE_GH_RELEASE',     defaultValue: true,  description: 'Create/Update a GitHub Release for tagged versions')
+    booleanParam(name: 'CREATE_GH_RELEASE',     defaultValue: false,  description: 'Create/Update a GitHub Release for tagged versions')
     booleanParam(name: 'GH_RELEASE_DRAFT',      defaultValue: false, description: 'Create releases as drafts')
     booleanParam(name: 'GH_RELEASE_PRERELEASE', defaultValue: false, description: 'Mark releases as prerelease')
     booleanParam(name: 'GH_GENERATE_NOTES',     defaultValue: false, description: 'Let GitHub auto-generate release notes (ignored if we supply notes body)')
