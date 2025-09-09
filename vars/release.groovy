@@ -249,31 +249,35 @@ private boolean createOrUpdateRelease(
   // If we craft a body, we cannot ALSO ask GitHub to auto-generate notes.
   boolean useGenerateNotes = generateNotesFlag && !attachCommitNotes
 
-  String hdrs = "-H \"Authorization: Bearer ${token}\" -H \"Accept: application/vnd.github+json\" -H \"Content-Type: application/json\""
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json' -H 'Content-Type: application/json'"
 
   // Does a release already exist for this tag?
   String status = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
 
   if (status == '200') {
-    // Update existing release (e.g., switch draft flag, body, etc.)
-    String rid = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag} | sed -n 's/.*\"id\"\\s*:\\s*\\([0-9][0-9]*\\).*/\\1/p' | head -n1", returnStdout: true).trim()
+    // Update existing release
+    String bodyJson = sh(script: "curl -s ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
+    def m = (bodyJson =~ /\"id\"\s*:\s*(\d+)/)
+    String rid = m.find() ? m.group(1) : ''
     if (rid) {
-      // Escape body for JSON
-      String bodyJson = body.replace("\\","\\\\").replace("\"","\\\"")
-      sh """
-        curl -sS -X PATCH ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/${rid} \
-          -d "{\\"name\\":\\"${tag}\\",\\"draft\\":${draft},\\"prerelease\\":${prerelease}${attachCommitNotes ? ',\\"body\\":\\"' + bodyJson + '\\"' : ''}}" >/dev/null
-      """
-      return true
+      Map patchPayload = [name: tag, draft: draft, prerelease: prerelease]
+      if (attachCommitNotes && body) { patchPayload.body = body }
+      String patchJson = groovy.json.JsonOutput.toJson(patchPayload)
+      writeFile file: 'gh-release-patch.json', text: patchJson
+      int rcPatch = sh(script: "curl -sS -X PATCH ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/${rid} -d @gh-release-patch.json >/dev/null", returnStatus: true)
+      return (rcPatch == 0)
     }
   }
 
-  // Create new release (GitHub will create tag if missing when target_commitish provided)
-  String bodyPart = attachCommitNotes ? ",\\"body\\":\\"${body.replace("\\","\\\\").replace("\"","\\\"")}\\"" : ""
-  String genNotesPart = useGenerateNotes ? ",\\"generate_release_notes\\":true" : ""
-  sh """
-    curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases \
-      -d "{\\"tag_name\\":\\"${tag}\\",\\"name\\":\\"${tag}\\",\\"draft\\":${draft},\\"prerelease\\":${prerelease}${genNotesPart}${bodyPart},\\"target_commitish\\":\\"${headSha}\\"}" >/dev/null
-  """
-  return true
+  // Create new release
+  Map createPayload = [tag_name: tag, name: tag, draft: draft, prerelease: prerelease, target_commitish: headSha]
+  if (attachCommitNotes && body) {
+    createPayload.body = body
+  } else if (useGenerateNotes) {
+    createPayload.generate_release_notes = true
+  }
+  String createJson = groovy.json.JsonOutput.toJson(createPayload)
+  writeFile file: 'gh-release.json', text: createJson
+  int rcPost = sh(script: "curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases -d @gh-release.json >/dev/null", returnStatus: true)
+  return (rcPost == 0)
 }
