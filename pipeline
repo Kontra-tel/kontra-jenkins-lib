@@ -30,15 +30,24 @@ pipeline {
     string      (name: 'RELEASE_BRANCH',       defaultValue: 'main', description: 'Branch where tagging is allowed when ONLY_TAG_ON_MAIN=true')
 
     // GitHub integration (for release step)
-    booleanParam(name: 'CREATE_GH_RELEASE',    defaultValue: false, description: 'Create/Update a GitHub Release for tagged versions')
-    booleanParam(name: 'GH_RELEASE_DRAFT',     defaultValue: false, description: 'Create releases as drafts')
-    booleanParam(name: 'GH_RELEASE_PRERELEASE',defaultValue: false, description: 'Mark releases as prerelease')
-    booleanParam(name: 'GH_GENERATE_NOTES',    defaultValue: true,  description: 'Auto-generate release notes')
-    string      (name: 'GH_OWNER',             defaultValue: 'Kontra-tel', description: 'GitHub org/user (helps GitHub App token inference)')
-    string      (name: 'GH_CREDENTIALS_ID',    defaultValue: 'Jenkins-Kontra', description: 'CredentialsId (GitHub App or PAT) for pushing tags/releases')
-  booleanParam(name: 'DEBUG_RELEASE',        defaultValue: false, description: 'Verbose diagnostics for release push/token')
-  string      (name: 'GIT_USER_NAME',        defaultValue: 'Jenkins CI', description: 'Git user.name for tagging (fallback if repo lacks config)')
-  string      (name: 'GIT_USER_EMAIL',       defaultValue: 'jenkins@local', description: 'Git user.email for tagging (fallback)')
+    booleanParam(name: 'CREATE_GH_RELEASE',     defaultValue: true,  description: 'Create/Update a GitHub Release for tagged versions')
+    booleanParam(name: 'GH_RELEASE_DRAFT',      defaultValue: false, description: 'Create releases as drafts')
+    booleanParam(name: 'GH_RELEASE_PRERELEASE', defaultValue: false, description: 'Mark releases as prerelease')
+    booleanParam(name: 'GH_GENERATE_NOTES',     defaultValue: false, description: 'Let GitHub auto-generate release notes (ignored if we supply notes body)')
+    string      (name: 'GH_OWNER',              defaultValue: 'Kontra-tel', description: 'GitHub org/user (helps GitHub App token inference)')
+    string      (name: 'GH_CREDENTIALS_ID',     defaultValue: 'Jenkins-Kontra', description: 'CredentialsId (GitHub App or PAT) for pushing tags/releases')
+
+    // Release notes controls (used by vars/release.groovy)
+    booleanParam(name: 'NOTES_SINCE_LAST_TAG',   defaultValue: true,  description: 'Include notes since previous tag in release body')
+    booleanParam(name: 'NOTES_INCLUDE_MERGES',   defaultValue: false, description: 'Include merge commits in notes')
+    string      (name: 'NOTES_MAX_COMMITS',      defaultValue: '200', description: 'Max commits to scan for notes')
+    booleanParam(name: 'ADD_COMPARE_LINK',       defaultValue: true,  description: 'Add compare link to release notes')
+    booleanParam(name: 'FALLBACK_RELEASE_CREATES_TAG', defaultValue: true, description: 'If push & Git API fail, let Release API create tag')
+
+    // Debug & git identity
+    booleanParam(name: 'DEBUG_RELEASE',        defaultValue: false, description: 'Verbose diagnostics for release push/token')
+    string      (name: 'GIT_USER_NAME',        defaultValue: 'Jenkins CI', description: 'Git user.name for tagging (fallback if repo lacks config)')
+    string      (name: 'GIT_USER_EMAIL',       defaultValue: 'jenkins@local', description: 'Git user.email for tagging (fallback)')
   }
 
   environment {
@@ -170,26 +179,37 @@ allprojects {
       }
       steps {
         script {
-          // Tag/push and/or create GitHub release based on params & last commit
+          // Tag/push and create GitHub release + notes since previous tag
           def rel = release(
-            version            : env.BUILD_VERSION,    // set by semver
+            version                 : env.BUILD_VERSION,    // set by semver
+
             // tagging behavior
-            alwaysTag          : params.ALWAYS_TAG,
-            tagOnRelease       : true,                 // create tag when commit has !release OR FORCE_RELEASE
-            forceRelease       : params.FORCE_RELEASE,
-            onlyTagOnMain      : params.ONLY_TAG_ON_MAIN,
-            releaseBranch      : params.RELEASE_BRANCH,
-            pushTags           : true,
-            gitUserName        : params.GIT_USER_NAME,
-            gitUserEmail       : params.GIT_USER_EMAIL,
-            debug              : params.DEBUG_RELEASE,
+            alwaysTag               : params.ALWAYS_TAG,
+            tagOnRelease            : true,                 // create tag when commit has !release OR FORCE_RELEASE
+            forceRelease            : params.FORCE_RELEASE,
+            onlyTagOnMain           : params.ONLY_TAG_ON_MAIN,
+            releaseBranch           : params.RELEASE_BRANCH,
+            pushTags                : true,
+            gitUserName             : params.GIT_USER_NAME,
+            gitUserEmail            : params.GIT_USER_EMAIL,
+            debug                   : params.DEBUG_RELEASE,
+
             // GitHub integration
-            credentialsId      : params.GH_CREDENTIALS_ID?.trim(),
-            owner              : params.GH_OWNER?.trim(),
-            createGithubRelease: params.CREATE_GH_RELEASE,
-            releaseDraft       : params.GH_RELEASE_DRAFT,
-            prerelease         : params.GH_RELEASE_PRERELEASE,
-            generateReleaseNotes: params.GH_GENERATE_NOTES
+            credentialsId           : params.GH_CREDENTIALS_ID?.trim(),
+            owner                   : params.GH_OWNER?.trim(),
+            createGithubRelease     : params.CREATE_GH_RELEASE,
+            releaseDraft            : params.GH_RELEASE_DRAFT,
+            prerelease              : params.GH_RELEASE_PRERELEASE,
+            generateReleaseNotes    : params.GH_GENERATE_NOTES,
+
+            // Notes
+            notesSinceLastTag       : params.NOTES_SINCE_LAST_TAG,
+            notesIncludeMerges      : params.NOTES_INCLUDE_MERGES,
+            notesMaxCommits         : params.NOTES_MAX_COMMITS,
+            addCompareLink          : params.ADD_COMPARE_LINK,
+
+            // Tag creation fallback (if push & Git API blocked)
+            fallbackUseReleaseToCreateTag : params.FALLBACK_RELEASE_CREATES_TAG
           )
           echo "release → tag=${rel.tag} tagged=${rel.tagged} pushed=${rel.pushed} ghReleased=${rel.githubReleased} branch=${rel.branch}"
           sh "git tag -l | tail -n 5 || true"
