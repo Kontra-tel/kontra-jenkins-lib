@@ -29,8 +29,6 @@ def call(Map cfg = [:]) {
     def sudo         = useSudo ? 'sudo ' : ''
     def ctl          = useUserUnit ? 'systemctl --user' : 'systemctl'
 
-    // Minimal shell escaper
-
     // Optionally deploy latest artifact
     String deployedJar = null
     if (artifactGlob) {

@@ -18,6 +18,7 @@ def call(Map cfg = [:]) {
   // Required
   String version = (cfg.version ?: env.BUILD_VERSION ?: '').toString().trim()
   if (!version) error "release: 'version' is required (or set env.BUILD_VERSION)"
+
   // Core config (provide safe defaults for all referenced symbols)
   final String  tagPrefix          = (cfg.tagPrefix ?: 'v') as String
   final String  releaseToken       = (cfg.releaseToken ?: '!release') as String
@@ -26,6 +27,7 @@ def call(Map cfg = [:]) {
   final boolean onlyTagOnMain      = (cfg.onlyTagOnMain == false) ? false : true
   final String  mainBranch         = (cfg.mainBranch ?: 'main') as String
   final boolean alwaysTag          = (cfg.alwaysTag == true)
+
   // Lightweight probe without regex (regex caused sandbox PatternSyntax issues under CPS)
   final boolean pushTags            = (cfg.pushTags == false) ? false : true
   final String  credentialsId       = (cfg.credentialsId ?: null) as String
@@ -34,6 +36,7 @@ def call(Map cfg = [:]) {
   final String  gitUserEmail        = (cfg.gitUserEmail ?: 'jenkins@local') as String
   final boolean debug               = (cfg.debug == true)
 
+  // GitHub Release
   final boolean createGithubRelease = (cfg.createGithubRelease == true)
   final boolean releaseDraft        = (cfg.releaseDraft == true)
   final boolean prerelease          = (cfg.prerelease == true)
@@ -142,7 +145,6 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
  * Preflight probe: does this token SEE the repo and have push permission?
  * Returns [code: "200"/..., push: true|false]
  */
-
 private void pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
   Map or = detectOwnerRepo(origin)

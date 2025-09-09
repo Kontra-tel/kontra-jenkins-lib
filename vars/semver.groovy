@@ -163,7 +163,6 @@ def call(Map cfg = [:]) {
 }
 
 // ---- helpers (CPS-safe) ----
-
 private String readTagVersion(String tagPattern, String tagMode) {
   String t
   if (tagMode == 'latest') {
