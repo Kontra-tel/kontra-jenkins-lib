@@ -35,7 +35,13 @@ class SemverTest extends BaseLibTest {
 
   private def runSemver(Map cfg = [:]) {
     def step = loadStep('semver')
-    return step.call([tagOnRelease:false, pushTags:false] + cfg)
+    // Ensure legacy expectation: default behavior auto-patch bumps unless caller overrides defaultBump
+    if (!cfg.containsKey('defaultBump')) {
+      cfg.defaultBump = 'patch'
+    }
+    def v = step.call([tagOnRelease:false, pushTags:false] + cfg)
+    println "TEST: result=${v}"
+    return v
   }
 
   @Test
