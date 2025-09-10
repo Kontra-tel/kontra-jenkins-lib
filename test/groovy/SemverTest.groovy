@@ -86,4 +86,22 @@ class SemverTest extends BaseLibTest {
     assert second.bump == 'none'
     assert second.version == first.version
   }
+
+  @Test
+  void no_bump_when_default_none_and_no_tokens() {
+    commitMessage = 'docs: update readme'
+    commitSha = '6666666666666666666666666666666666666666'
+    def v = runSemver(defaultBump:'none')
+    assert v.version == '0.0.0'
+    assert v.bump == 'none'
+  }
+
+  @Test
+  void patch_bump_with_explicit_patch_token_when_default_none() {
+    commitMessage = 'fix: minor fix !patch'
+    commitSha = '7777777777777777777777777777777777777777'
+    def v = runSemver(defaultBump:'none')
+    assert v.version == '0.0.1'
+    assert v.bump == 'patch'
+  }
 }

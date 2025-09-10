@@ -132,6 +132,12 @@ def call(Map cfg = [:]) {
       else                                     {                 bump = 'none'  }
   }
 
+  // Safety: if defaultBump requested patch but we still ended up with 'none', enforce patch
+  if (bump == 'none' && defaultBump == 'patch') {
+    p++
+    bump = 'patch'
+  }
+
   // Optional cumulative patch (only if baseline is a tag and this is a plain patch w/out forced bump)
   int commitsSinceTag = 0
   if (forcedBump == '' && cumulativePatch && baselineSource == 'tag' && bump == 'patch'
