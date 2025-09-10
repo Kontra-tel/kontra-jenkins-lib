@@ -25,8 +25,9 @@ pipeline {
 
     // Release controls (tagging / GitHub release)
     booleanParam(name: 'FORCE_RELEASE',        defaultValue: false, description: 'Force tagging this build as a release (!release)')
-    booleanParam(name: 'ALWAYS_TAG',           defaultValue: false, description: 'Create a git tag for every bump')
-    booleanParam(name: 'ONLY_TAG_ON_MAIN',     defaultValue: true,  description: 'Only tag on the main branch')
+    // Auto-tag every version by default now
+    booleanParam(name: 'ALWAYS_TAG',           defaultValue: true,  description: 'Create a git tag for every bump (auto-enabled)')
+    booleanParam(name: 'ONLY_TAG_ON_MAIN',     defaultValue: false, description: 'Only tag on the main branch (disabled to tag all branches)')
     string      (name: 'RELEASE_BRANCH',       defaultValue: 'main', description: 'Branch where tagging is allowed when ONLY_TAG_ON_MAIN=true')
 
     // GitHub integration (for release step)
@@ -183,18 +184,18 @@ allprojects {
           def rel = release(
             version                 : env.BUILD_VERSION,    // set by semver
 
-            // tagging behavior
-            alwaysTag               : params.ALWAYS_TAG,
-            tagOnRelease            : true,                 // create tag when commit has !release OR FORCE_RELEASE
-            forceRelease            : params.FORCE_RELEASE,
-            onlyTagOnMain           : params.ONLY_TAG_ON_MAIN,
+            // Force tagging every build & push tags (independent of commit tokens)
+            alwaysTag               : true,
+            tagOnRelease            : true,
+            forceRelease            : params.FORCE_RELEASE, // still allow manual force for metadata
+            onlyTagOnMain           : false,                // tag every branch
             releaseBranch           : params.RELEASE_BRANCH,
             pushTags                : true,
             gitUserName             : params.GIT_USER_NAME,
             gitUserEmail            : params.GIT_USER_EMAIL,
             debug                   : params.DEBUG_RELEASE,
 
-            // GitHub integration
+            // GitHub integration (still optional)
             credentialsId           : params.GH_CREDENTIALS_ID?.trim(),
             owner                   : params.GH_OWNER?.trim(),
             createGithubRelease     : params.CREATE_GH_RELEASE,
