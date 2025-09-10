@@ -33,7 +33,7 @@ def call(Map cfg = [:]) {
   final String  tagMode            = (cfg.tagMode ?: 'nearest') as String          // 'nearest' | 'latest'
   final boolean writeFileOut       = (cfg.writeFile == false) ? false : true
   final String  stateFile          = (cfg.stateFile ?: '.semver-state') as String
-  final String  defaultBump        = ((cfg.defaultBump ?: 'patch') as String).toLowerCase() // 'patch' | 'none'
+  final String  defaultBump        = ((cfg.defaultBump ?: 'none') as String).toLowerCase() // 'patch' | 'none'
 
   // Optional forced bumps (overrides tokens)
   String forcedBump = (cfg.forceBump ?: '').toString().toLowerCase()
