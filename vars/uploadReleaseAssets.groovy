@@ -106,7 +106,7 @@ private void deleteReleaseAsset(String apiBase, String owner, String repo, Strin
 }
 
 private boolean uploadReleaseAsset(String uploadsBase, String owner, String repo, String rid, String filePath, String name, String token, String contentType) {
-  String encName = java.net.URLEncoder.encode(name, 'UTF-8').replaceAll('\\+','%20')
+  String encName = java.net.URLEncoder.encode(name, 'UTF-8').replaceAll('\\\\+','%20')
   String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Content-Type: ${contentType}'"
   return sh(script: "curl -sS --data-binary @\"${filePath}\" ${hdrs} ${uploadsBase}/repos/${owner}/${repo}/releases/${rid}/assets?name=${encName} -o /dev/null", returnStatus: true) == 0
 }
