@@ -60,6 +60,12 @@ def call(Map cfg = [:]) {
   final boolean attachCommitNotes   = (cfg.attachCommitNotes != false)     // our simple commit list (default on)
   final String  notesHeader         = (cfg.releaseNotesHeader ?: 'Changes since last release:') as String
   final String  githubApi           = (cfg.githubApi ?: 'https://api.github.com') as String
+  final String  githubUploads       = (cfg.githubUploads ?: 'https://uploads.github.com') as String
+  // Optional asset upload configuration (delegated to uploadReleaseAssets step)
+  def          assetsCfgRaw         = cfg.assets
+  final boolean assetOverwrite      = (cfg.assetOverwrite == true)
+  final String  assetContentType    = (cfg.assetContentType ?: 'application/octet-stream') as String
+  Map           assetsRename        = (cfg.assetsRename instanceof Map) ? (Map)cfg.assetsRename : [:]
 
   // Repo facts
   String commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
@@ -142,6 +148,20 @@ def call(Map cfg = [:]) {
       releaseDraft, prerelease,
       generateNotesFlag, attachCommitNotes, notesHeader, tagPrefix
     )
+
+    // Upload assets if configured (delegate to separate step)
+    if (ghRel && assetsCfgRaw) {
+      uploadReleaseAssets(
+        tag: tag,
+        credentialsId: credentialsId,
+        assets: assetsCfgRaw,
+        assetsRename: assetsRename,
+        assetOverwrite: assetOverwrite,
+        assetContentType: assetContentType,
+        githubApi: githubApi,
+        githubUploads: githubUploads
+      )
+    }
   } else if (ghReleaseRequested && !credentialsId) {
     echo "release: GitHub release requested but no credentialsId provided — skipping GH Release"
   }
@@ -190,69 +210,6 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
   } catch (Throwable ignore) {}
   // Secret Text (PAT)
   try {
-    def token = null
-    withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN_TMP')]) {
-      token = env.GITHUB_TOKEN_TMP
-    }
-    if (token) return token
-  } catch (Throwable ignore) {}
-  // Username/Password (use password as token)
-  try {
-    def tok = null
-    withCredentials([usernamePassword(credentialsId: credentialsId, usernameVariable: 'GITHUB_USER_TMP', passwordVariable: 'GITHUB_PASS_TMP')]) {
-      tok = env.GITHUB_PASS_TMP
-    }
-    if (tok) return tok
-  } catch (Throwable ignore) {}
-  return null
-}
-
-private void pushTag(String tag, String credentialsId, String ownerHint, String apiBase, boolean debug=false) {
-  String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-  Map or = detectOwnerRepo(origin)
-  String httpsRepo = origin
-    .replaceFirst(/^git@github\.com:/, 'https://github.com/')
-    .replaceFirst(/^https:\/\/[^@]+@github\.com\//, 'https://github.com/')
-
-  String token = resolveGithubToken(credentialsId, ownerHint ?: or.owner)
-  if (debug) {
-    String prefix = token ? token.substring(0, Math.min(7, token.length())) + '…' : 'none'
-    echo "release: pushTag repo=${or.owner}/${or.repo} credId=${credentialsId ?: 'none'} token=${prefix}"
-  }
-
-  if (!token) {
-    int rc = sh(script: "git push origin ${tag}", returnStatus: true)
-    if (rc != 0) {
-      echo "release: push failed (status=${rc}) without token. Ensure Jenkins has push rights (deploy key with write or PAT)."
-      error "release: git push failed (no token)"
-    }
-    return
-  }
-
-  // HTTPS push with App/PAT token
-  writeFile file: 'git-askpass.sh', text: '#!/bin/sh\necho "$GITHUB_TOKEN"\n'
-  sh 'chmod 700 git-askpass.sh'
-  def ask = "${pwd()}/git-askpass.sh"
-  withEnv(["GIT_ASKPASS=${ask}", "GITHUB_TOKEN=${token}"]) {
-    int rc = sh(script: """
-       set -e
-       git remote set-url origin https://x-access-token:${token}@${httpsRepo.replaceFirst(/^https:\\/\\//,'')}
-       GIT_CURL_VERBOSE=${debug ? 1 : 0} git push origin ${tag}
-    """.stripIndent(), returnStatus: true)
-    if (rc != 0) {
-      echo "release: push failed (status=${rc}). Token may lack permissions or protected tags block creation."
-      error "release: git push failed"
-    }
-  }
-}
-
-private boolean createOrUpdateRelease(
-  String tag, String credentialsId, String apiBase,
-  boolean draft, boolean prerelease,
-  boolean generateNotesFlag, boolean attachCommitNotes, String notesHeader, String tagPrefix
-) {
-  String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-  Map or = detectOwnerRepo(origin)
   String owner = or.owner
   String repo  = or.repo
   if (!owner || !repo) { echo "release: owner/repo not detected from origin; skipping GitHub Release"; return false }
@@ -312,4 +269,67 @@ private boolean createOrUpdateRelease(
   writeFile file: 'gh-release.json', text: createJson
   int rcPost = sh(script: "curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases -d @gh-release.json >/dev/null", returnStatus: true)
   return (rcPost == 0)
+}
+
+// --- Asset helpers ---
+private String getReleaseIdByTag(String apiBase, String owner, String repo, String tag, String token) {
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json'"
+  String body = sh(script: "curl -sS ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
+  def m = (body =~ /\"id\"\s*:\s*(\d+)/)
+  return m.find() ? m.group(1) : ''
+}
+
+private Map listReleaseAssets(String apiBase, String owner, String repo, String rid, String token) {
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json'"
+  String json = sh(script: "curl -sS ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/${rid}/assets", returnStdout: true).trim()
+  Map out = [:]
+  try {
+    def items = new groovy.json.JsonSlurperClassic().parseText(json)
+    items.each { it -> if (it?.name && it?.id) out[it.name.toString()] = it.id.toString() }
+  } catch (Throwable ignore) {}
+  return out
+}
+
+private void deleteReleaseAsset(String apiBase, String owner, String repo, String assetId, String token) {
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json'"
+  sh "curl -sS -X DELETE ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/assets/${assetId} -o /dev/null"
+}
+
+private boolean uploadReleaseAsset(String uploadsBase, String owner, String repo, String rid, String filePath, String name, String token, String contentType) {
+  String encName = java.net.URLEncoder.encode(name, 'UTF-8').replaceAll('\+','%20')
+  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Content-Type: ${contentType}'"
+  return sh(script: "curl -sS --data-binary @\"${filePath}\" ${hdrs} ${uploadsBase}/repos/${owner}/${repo}/releases/${rid}/assets?name=${encName} -o /dev/null", returnStatus: true) == 0
+}
+
+private List<String> normalizeAssetsList(def raw) {
+  if (raw == null) return []
+  if (raw instanceof List) return raw.collect { it.toString() }
+  String s = raw.toString()
+  if (!s) return []
+  return s.split(',').collect { it.trim() }.findAll { it }
+}
+
+private List<String> expandGlobs(List<String> patterns) {
+  Set<String> out = [] as Set
+  for (String p : patterns) {
+    String cmd = "ls -1 ${p} 2>/dev/null || true"
+    String res = sh(script: cmd, returnStdout: true).trim()
+    if (res) {
+      res.split(/\r?\n/).each { out << it.trim() }
+    }
+  }
+  return out as List<String>
+}
+
+private String detectContentType(String path, String fallback) {
+  String n = path.toLowerCase()
+  if (n.endsWith('.jar')) return 'application/java-archive'
+  if (n.endsWith('.zip')) return 'application/zip'
+  if (n.endsWith('.tar.gz') || n.endsWith('.tgz')) return 'application/gzip'
+  if (n.endsWith('.gz')) return 'application/gzip'
+  if (n.endsWith('.tar')) return 'application/x-tar'
+  if (n.endsWith('.json')) return 'application/json'
+  if (n.endsWith('.md')) return 'text/markdown'
+  if (n.endsWith('.txt')) return 'text/plain'
+  return fallback ?: 'application/octet-stream'
 }
