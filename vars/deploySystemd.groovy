@@ -193,8 +193,8 @@ ${startCommand}
         unitContent  : unitContent,
         deployedJar  : deployedJar,
         execStart    : execStart,
-    launchScript : launchScriptWrittenPath,
-    launchScriptContent: launchScriptContent,
+        launchScript : launchScriptWrittenPath,
+        launchScriptContent: launchScriptContent,
         restarted    : !dryRun
     ]
 }
