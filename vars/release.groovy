@@ -1,7 +1,28 @@
 // vars/release.groovy
 //
 // Creates/pushes a git tag (e.g. vX.Y.Z) and optionally a GitHub Release.
-// Expects `version:` (string). Does NOT compute/bump versions.
+// Expects `version:` (string). Does NOT co  if (ghReleaseRequested && credentialsId) {
+    // If we attempted to push the tag, trust that it succeeded
+    // (the git push command would have failed if it didn't work)
+    if (!pushed && !remoteTagExists(tag)) {
+      echo "release: GH release requested but tag ${tag} not found on origin and push was not attempted"
+      echo "release: Enable pushTags or ensure the tag exists on remote first"
+      if (debug) {
+        echo "release: ghReleaseRequested=${ghReleaseRequested}, credentialsId=${credentialsId}"
+        echo "release: tagged=${tagged}, pushed=${pushed}"
+      }
+      return [
+        tag                : tag,
+        tagged             : tagged,
+        pushed             : pushed,
+        githubReleased     : false,
+        isRelease          : isRelease,
+        ghReleaseRequested : ghReleaseRequested,
+        branch             : branch
+      ]
+    }
+    
+    if (debug) echo "release: Tag ${tag} should be on remote (pushed=${pushed}), proceeding with GitHub Release creation"
 //
 // Tagging gates (independent of GH Release):
 //   - alwaysTag:true                      -> tag every build
@@ -146,10 +167,11 @@ def call(Map cfg = [:]) {
   }
 
   if (ghReleaseRequested && credentialsId) {
-    // Require the tag to exist on the remote; do not let GH release creation implicitly create the tag
-    if (!remoteTagExists(tag)) {
-      echo "release: GH release requested but tag ${tag} not found on origin; push the tag first (use !release or !tag)"
-      echo "release: This usually means the tag push failed. Check authentication and push logs above."
+    // If we attempted to push the tag, trust that it succeeded
+    // (the git push command would have failed if it didn't work)
+    if (!pushed && !remoteTagExists(tag)) {
+      echo "release: GH release requested but tag ${tag} not found on origin and push was not attempted"
+      echo "release: Enable pushTags or ensure the tag exists on remote first"
       if (debug) {
         echo "release: ghReleaseRequested=${ghReleaseRequested}, credentialsId=${credentialsId}"
         echo "release: tagged=${tagged}, pushed=${pushed}"
@@ -165,7 +187,7 @@ def call(Map cfg = [:]) {
       ]
     }
     
-    if (debug) echo "release: Tag ${tag} confirmed on remote, proceeding with GitHub Release creation"
+    if (debug) echo "release: Tag ${tag} should be on remote (pushed=${pushed}), proceeding with GitHub Release creation"
     
     ghRel = createOrUpdateRelease(
       tag, credentialsId, githubApi,
