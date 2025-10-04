@@ -222,7 +222,31 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
 private void pushTag(String tag, String credentialsId, String ownerHint, String githubApi, boolean debug) {
   if (debug) echo "release: pushing tag ${tag} to origin"
   if (credentialsId) {
-    withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN')]) {
+    // Get the appropriate token for the credential type
+    String token = resolveGithubToken(credentialsId, ownerHint)
+    if (token) {
+      // Get current remote URL and temporarily modify it to include the token
+      String originalUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+      try {
+        // Convert to HTTPS URL with token if not already
+        String authUrl = originalUrl
+        if (originalUrl.startsWith('git@github.com:')) {
+          String repoPath = originalUrl.substring('git@github.com:'.length()).replaceAll(/\.git$/, '')
+          authUrl = "https://x-access-token:${token}@github.com/${repoPath}.git"
+        } else if (originalUrl.startsWith('https://github.com/')) {
+          String repoPath = originalUrl.substring('https://github.com/'.length())
+          authUrl = "https://x-access-token:${token}@github.com/${repoPath}"
+        }
+        
+        // Temporarily set the remote URL and push
+        sh "git remote set-url origin '${authUrl}'"
+        sh "git push origin ${tag}"
+      } finally {
+        // Restore original remote URL
+        sh "git remote set-url origin '${originalUrl}'"
+      }
+    } else {
+      // Fallback to direct push (might use SSH keys or other auth)
       sh "git push origin ${tag}"
     }
   } else {
