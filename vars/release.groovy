@@ -208,8 +208,35 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
     if (ownerHint) return githubAppToken(credentialsId: credentialsId, owner: ownerHint)
     return githubAppToken(credentialsId: credentialsId)
   } catch (Throwable ignore) {}
-  // Secret Text (PAT)
+  // Fallback to withCredentials for Secret Text (PAT)
   try {
+    String token = null
+    withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN')]) {
+      token = env.GITHUB_TOKEN
+    }
+    return token
+  } catch (Throwable ignore) {}
+  return null
+}
+
+private void pushTag(String tag, String credentialsId, String ownerHint, String githubApi, boolean debug) {
+  if (debug) echo "release: pushing tag ${tag} to origin"
+  if (credentialsId) {
+    withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN')]) {
+      sh "git push origin ${tag}"
+    }
+  } else {
+    sh "git push origin ${tag}"
+  }
+}
+
+private boolean createOrUpdateRelease(
+  String tag, String credentialsId, String apiBase,
+  boolean draft, boolean prerelease,
+  boolean generateNotesFlag, boolean attachCommitNotes, String notesHeader, String tagPrefix
+) {
+  String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+  Map or = detectOwnerRepo(origin)
   String owner = or.owner
   String repo  = or.repo
   if (!owner || !repo) { echo "release: owner/repo not detected from origin; skipping GitHub Release"; return false }
