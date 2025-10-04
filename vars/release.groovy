@@ -54,6 +54,7 @@ def call(Map cfg = [:]) {
 
   // Core config (provide safe defaults for all referenced symbols)
   final String  tagPrefix          = (cfg.tagPrefix ?: 'v') as String
+  final String  tagPattern         = (cfg.tagPattern ?: 'v[0-9]*') as String
   final boolean tagOnRelease       = (cfg.tagOnRelease == false) ? false : true
   final boolean forceRelease       = (cfg.forceRelease == true)
   final boolean onlyTagOnMain      = (cfg.onlyTagOnMain == false) ? false : true
@@ -194,7 +195,7 @@ def call(Map cfg = [:]) {
       tag, credentialsId, githubApi,
       releaseDraft, prerelease,
       generateNotesFlag, attachCommitNotes, notesHeader, tagPrefix,
-      useChangelogModule, version, debug
+      useChangelogModule, version, debug, tagPattern
     )
 
     // Upload assets if configured (delegate to separate step)
@@ -355,7 +356,7 @@ private boolean createOrUpdateRelease(
   String tag, String credentialsId, String apiBase,
   boolean draft, boolean prerelease,
   boolean generateNotesFlag, boolean attachCommitNotes, String notesHeader, String tagPrefix,
-  boolean useChangelogModule, String version, boolean debug
+  boolean useChangelogModule, String version, boolean debug, String tagPattern
 ) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
   Map or = detectOwnerRepo(origin)
