@@ -1,4 +1,5 @@
 // vars/deploySystemd.groovy
+// Deploy services as systemd user units (user units only - no system-wide services)
 def call(Map cfg = [:]) {
     if (!cfg.service) { error "deploySystemd: 'service' is required" }
 
@@ -21,19 +22,18 @@ def call(Map cfg = [:]) {
     def javaBin      = cfg.javaBin    ?: '/usr/bin/java'
     def javaOpts     = cfg.javaOpts   ?: (env.JAVA_OPTS ?: '')
     def appArgs      = cfg.appArgs    ?: ''
-    def user         = cfg.user       ?: 'root'
-    def group        = cfg.group      ?: user
+    // Optional: Run systemd commands as a different user (e.g., 'kontra-service')
+    // This allows a central service user to own all deployed services
+    def runAsUser    = cfg.runAsUser  ?: null
     def restart      = cfg.restart    ?: 'always' // on-failure|always
     def restartSec   = cfg.restartSec ?: '3'
-    def enable       = (cfg.enable == false) ? false : true
     def installUnit  = (cfg.installUnit == false) ? false : true
     def overwriteUnit = (cfg.overwriteUnit == false) ? false : true
-    def useUserUnit  = (cfg.useUserUnit == true)
-    def unitPath     = cfg.unitPath ?: (useUserUnit ? "${env.HOME}/.config/systemd/user/${service}.service"
-                                                    : "/etc/systemd/system/${service}.service")
-    def useSudo      = (cfg.useSudo == false || useUserUnit) ? false : true
-    def sudo         = useSudo ? 'sudo ' : ''
-    def ctl          = useUserUnit ? 'systemctl --user' : 'systemctl'
+    
+    // User units only - simplified configuration
+    def homeDir      = runAsUser ? "/home/${runAsUser}" : env.HOME
+    def unitPath     = cfg.unitPath ?: "${homeDir}/.config/systemd/user/${service}.service"
+    def runAsPrefix  = runAsUser ? "sudo -u ${runAsUser} " : ''
 
     // Optionally deploy latest artifact
     String deployedJar = null
@@ -41,8 +41,8 @@ def call(Map cfg = [:]) {
         def latest = sh(script: "ls -t ${artifactGlob} 2>/dev/null | head -n 1", returnStdout: true).trim()
         if (!latest) { error "deploySystemd: no artifacts matched '${artifactGlob}'" }
         if (!dryRun) {
-            sh "${sudo}mkdir -p '${targetDir}'"
-            sh "${sudo}install -m 644 '${latest}' '${targetDir}/${targetName}'"
+            sh "mkdir -p '${targetDir}'"
+            sh "install -m 644 '${latest}' '${targetDir}/${targetName}'"
         }
         deployedJar = "${targetDir}/${targetName}"
         echo "deploySystemd: ${dryRun ? 'would deploy' : 'deployed'} artifact -> ${deployedJar} (from ${latest})"
@@ -57,12 +57,8 @@ def call(Map cfg = [:]) {
             try { launchScriptContent = readFile(file: repoLaunchScript) } catch (Throwable ignore) {}
             echo "deploySystemd(dryRun): would install repo launch script '${repoLaunchScript}' -> ${launchScriptPath}"
         } else {
-            sh "${sudo}mkdir -p '${workingDir}'"
-            if (useSudo) {
-                sh "${sudo}install -m 755 '${repoLaunchScript}' '${launchScriptPath}'"
-            } else {
-                sh "install -m 755 '${repoLaunchScript}' '${launchScriptPath}'"
-            }
+            sh "mkdir -p '${workingDir}'"
+            sh "install -m 755 '${repoLaunchScript}' '${launchScriptPath}'"
             launchScriptWrittenPath = launchScriptPath
             echo "deploySystemd: installed repo launch script -> ${launchScriptWrittenPath}"
         }
@@ -80,15 +76,10 @@ ${startCommand}
             launchScriptContent = script
             echo "deploySystemd(dryRun): would write launch script -> ${launchScriptPath}"
         } else {
-            // ensure working directory exists before installing the script
-            sh "${sudo}mkdir -p '${workingDir}'"
+            sh "mkdir -p '${workingDir}'"
             def tmp = ".tmp.${service}.launch.sh"
             writeFile file: tmp, text: script
-            if (useSudo) {
-                sh "${sudo}install -m 755 '${tmp}' '${launchScriptPath}'"
-            } else {
-                sh "install -m 755 '${tmp}' '${launchScriptPath}'"
-            }
+            sh "install -m 755 '${tmp}' '${launchScriptPath}'"
             sh "rm -f '${tmp}'"
             launchScriptWrittenPath = launchScriptPath
             echo "deploySystemd: wrote launch script -> ${launchScriptWrittenPath}"
@@ -98,7 +89,7 @@ ${startCommand}
     // compute ExecStart (may depend on deployedJar)
     def execStart = execStartCfg
     if (!execStart) {
-    if (startCommand || launchScriptWrittenPath) {
+        if (startCommand || launchScriptWrittenPath) {
             // Run the generated launch script through bash -lc to allow shell features
             execStart = "/usr/bin/env bash -lc '${launchScriptPath}'"
         } else {
@@ -130,8 +121,6 @@ ${startCommand}
 
                 [Service]
                 Type=simple
-                User=${user}
-                Group=${group}
                 WorkingDirectory=${workingDir}
                 ${envFile ? "EnvironmentFile=-${envFile}" : ''}
                 ExecStart=${execStart}
@@ -142,7 +131,7 @@ ${startCommand}
                 SyslogIdentifier=${service}
 
                 [Install]
-                WantedBy=multi-user.target
+                WantedBy=default.target
             """.stripIndent()
             if (dryRun) {
                 unitContent = unit
@@ -150,10 +139,11 @@ ${startCommand}
             } else {
                 def tmp = ".tmp.${service}.service"
                 writeFile file: tmp, text: unit
-                if (!useUserUnit) {
-                    sh "${sudo}install -m 644 '${tmp}' '${unitPath}'"
+                if (runAsUser) {
+                    sh "${runAsPrefix}mkdir -p '${homeDir}/.config/systemd/user'"
+                    sh "${runAsPrefix}install -m 644 '${tmp}' '${unitPath}'"
                 } else {
-                    sh "mkdir -p '${env.HOME}/.config/systemd/user'"
+                    sh "mkdir -p '${homeDir}/.config/systemd/user'"
                     sh "install -m 644 '${tmp}' '${unitPath}'"
                 }
                 sh "rm -f '${tmp}'"
@@ -166,23 +156,21 @@ ${startCommand}
         }
     }
 
-    // Ensure working dir + env perms are sane
+    // Ensure working dir perms are sane
     if (!dryRun) {
-        sh "${sudo}mkdir -p '${workingDir}'"
-        if (user && !useUserUnit) {
-            sh "${sudo}chown -R ${user}:${group} '${workingDir}' || true"
-        }
+        sh "mkdir -p '${workingDir}'"
     }
 
-    // Restart service
+    // Use the new restartSystemd module for service management
+    def restartResult = null
     if (!dryRun) {
-        sh "${sudo}${ctl} daemon-reload"
-        if (enable) { sh "${sudo}${ctl} enable ${service} || true" }
-        sh "${sudo}${ctl} stop ${service} || true" // stop first
-        sh "${sudo}${ctl} start ${service}"
-        sh "${sudo}${ctl} status --no-pager ${service} || true"
+        restartResult = restartSystemd(
+            service: service,
+            runAsUser: runAsUser,
+            enable: (cfg.enable == false) ? false : true
+        )
     } else {
-        echo "deploySystemd(dryRun): would reload+enable+restart ${service}"
+        echo "deploySystemd(dryRun): would call restartSystemd to reload+enable+restart ${service}"
     }
 
     return [
@@ -195,6 +183,7 @@ ${startCommand}
         execStart    : execStart,
         launchScript : launchScriptWrittenPath,
         launchScriptContent: launchScriptContent,
-        restarted    : !dryRun
+        restarted    : !dryRun,
+        restartResult: restartResult
     ]
 }

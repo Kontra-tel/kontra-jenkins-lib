@@ -1,7 +1,7 @@
 import org.junit.Before
 import org.junit.Test
 
-/** Tests for deploySystemd step (dryRun + unit synthesis). */
+/** Tests for deploySystemd step (dryRun + unit synthesis - user units only). */
 class DeploySystemdTest extends BaseLibTest {
 
   @Before
@@ -13,7 +13,14 @@ class DeploySystemdTest extends BaseLibTest {
       if (script.contains("ls -t target/*.jar")) {
         return m.returnStdout ? "target/app-1.2.3.jar\n" : 0
       }
+      if (script.contains("whoami")) {
+        return m.returnStdout ? "jenkins\n" : 0
+      }
       return m.returnStdout ? "" : 0
+    })
+    // Add stub for restartSystemd
+    helper.registerAllowedMethod('restartSystemd', [Map.class], { m ->
+      return [service: m.service, runAsUser: m.runAsUser, enabled: m.enable, started: true]
     })
   }
 
@@ -30,42 +37,40 @@ class DeploySystemdTest extends BaseLibTest {
       targetDir: '/opt/kontraAPI/build',
       targetName: 'kontraAPI.jar',
       envFile: '/opt/kontraAPI/build/.env',
-      user: 'kaappi',
-      group: 'kaappi',
       installUnit: true,
       overwriteUnit: true,
-      useSudo: false,
       execStart: "/usr/bin/env bash -lc 'cd /opt/kontraAPI && ./startup.sh'"
     )
 
     assert res.dryRun
     assert res.service == 'kontraAPI'
-  // unit content should be returned and staged at a .dryrun.* path only
-  assert res.unitContent
-  def unitText = res.unitContent
+    // unit content should be returned
+    assert res.unitContent
+    def unitText = res.unitContent
     assert unitText.contains('Description=Kontra API')
     assert unitText.contains('WorkingDirectory=/opt/kontraAPI')
     assert unitText.contains('EnvironmentFile=-/opt/kontraAPI/build/.env')
     assert unitText.contains("ExecStart=/usr/bin/env bash -lc 'cd /opt/kontraAPI && ./startup.sh'")
+    assert unitText.contains('WantedBy=default.target')  // User units always use default.target
 
-    // in dryRun we should not see daemon-reload/start
+    // in dryRun we should not see systemctl commands
     assert shCalls.find { it.contains('systemctl') } == null
   }
 
   @Test
-  void uses_user_unit_when_requested() {
+  void uses_central_service_user_when_specified() {
     def step = loadStep('deploySystemd')
     def res = step.call(
       dryRun: true,
-      service: 'myuser-svc',
-      workingDir: '/home/jenkins/myapp',
-      useUserUnit: true,     // <-- user unit
+      service: 'myapp-svc',
+      workingDir: '/home/kontra-service/apps/myapp',
+      runAsUser: 'kontra-service',  // Central service user
       installUnit: true,
       overwriteUnit: true,
-      useSudo: false,
       execStart: "/usr/bin/env bash -lc 'echo hello'"
     )
-  assert res.unitContent
+    assert res.unitContent
+    assert res.unitPath.contains('/home/kontra-service/.config/systemd/user/')
   }
 
   @Test
@@ -80,14 +85,11 @@ class DeploySystemdTest extends BaseLibTest {
       targetName: 'synthsvc.jar',
       javaOpts: '-Xmx256m',
       appArgs: '--port 8080 --verbose',
-      user: 'root',
-      group: 'root',
       installUnit: true,
-      overwriteUnit: true,
-      useSudo: false
+      overwriteUnit: true
     )
     assert res.dryRun
     assert res.execStart.contains('/usr/bin/java -Xmx256m -jar /opt/synthsvc/synthsvc.jar --port 8080 --verbose')
-  assert res.unitContent.contains('ExecStart=/usr/bin/java -Xmx256m -jar /opt/synthsvc/synthsvc.jar --port 8080 --verbose')
+    assert res.unitContent.contains('ExecStart=/usr/bin/java -Xmx256m -jar /opt/synthsvc/synthsvc.jar --port 8080 --verbose')
   }
 }
