@@ -193,7 +193,8 @@ def call(Map cfg = [:]) {
     ghRel = createOrUpdateRelease(
       tag, credentialsId, githubApi,
       releaseDraft, prerelease,
-      generateNotesFlag, attachCommitNotes, notesHeader, tagPrefix
+      generateNotesFlag, attachCommitNotes, notesHeader, tagPrefix,
+      useChangelogModule, version, debug
     )
 
     // Upload assets if configured (delegate to separate step)
@@ -353,7 +354,8 @@ private void pushTag(String tag, String credentialsId, String ownerHint, String 
 private boolean createOrUpdateRelease(
   String tag, String credentialsId, String apiBase,
   boolean draft, boolean prerelease,
-  boolean generateNotesFlag, boolean attachCommitNotes, String notesHeader, String tagPrefix
+  boolean generateNotesFlag, boolean attachCommitNotes, String notesHeader, String tagPrefix,
+  boolean useChangelogModule, String version, boolean debug
 ) {
   String origin = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
   Map or = detectOwnerRepo(origin)
