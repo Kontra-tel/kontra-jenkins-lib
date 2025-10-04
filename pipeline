@@ -38,6 +38,7 @@ pipeline {
     string      (name: 'GH_CREDENTIALS_ID',     defaultValue: 'Jenkins-Kontra', description: 'Jenkins credentials ID (GitHub App or PAT)')
 
     // Release notes controls
+    booleanParam(name: 'USE_ENHANCED_NOTES',     defaultValue: true,  description: 'Use enhanced changelog format (grouped, full messages, token removal)')
     booleanParam(name: 'NOTES_SINCE_LAST_TAG',   defaultValue: true,  description: 'Include commit notes since previous tag in release body')
     booleanParam(name: 'NOTES_INCLUDE_MERGES',   defaultValue: false, description: 'Include merge commits in release notes')
     string      (name: 'NOTES_MAX_COMMITS',      defaultValue: '200', description: 'Maximum commits to scan for release notes')
@@ -161,7 +162,9 @@ allprojects {
         script {
           def out = generateChangelog(
             outputFile: env.CHANGELOG_FILE,
-            version   : env.BUILD_VERSION
+            version   : env.BUILD_VERSION,
+            
+
           )
           echo "Changelog updated → ${out ?: 'no changes'}"
           archiveArtifacts artifacts: env.CHANGELOG_FILE, fingerprint: true
@@ -201,6 +204,9 @@ allprojects {
             releaseDraft            : params.GH_RELEASE_DRAFT,
             prerelease              : params.GH_RELEASE_PRERELEASE,
             generateReleaseNotes    : params.GH_GENERATE_NOTES,
+
+            // Enhanced release notes (grouped commits, full messages, token removal)
+            useChangelogModule      : params.USE_ENHANCED_NOTES,
 
             // Notes
             notesSinceLastTag       : params.NOTES_SINCE_LAST_TAG,

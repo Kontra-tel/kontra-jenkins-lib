@@ -83,6 +83,7 @@ def call(Map cfg = [:]) {
   final boolean prerelease          = (cfg.prerelease == true)
   final boolean generateNotesFlag   = (cfg.generateReleaseNotes == true)   // API "generate_release_notes"
   final boolean attachCommitNotes   = (cfg.attachCommitNotes != false)     // our simple commit list (default on)
+  final boolean useChangelogModule  = (cfg.useChangelogModule == true)     // use generateChangelog for enhanced notes
   final String  notesHeader         = (cfg.releaseNotesHeader ?: 'Changes since last release:') as String
   final String  githubApi           = (cfg.githubApi ?: 'https://api.github.com') as String
   final String  githubUploads       = (cfg.githubUploads ?: 'https://uploads.github.com') as String
@@ -370,15 +371,67 @@ private boolean createOrUpdateRelease(
     returnStdout: true
   ).trim()
   String commitRange = prevTag ? "${prevTag}..HEAD" : ""
-  String changes = commitRange ? sh(
-    script: "git log --no-merges --pretty='- %s (%h)' ${commitRange}",
-    returnStdout: true
-  ).trim() : ""
+  
   String body = ""
   if (attachCommitNotes) {
-    String header = prevTag ? "${notesHeader} (${prevTag} → ${tag})" : "${notesHeader}"
-    // Use real newlines so GitHub renders the list correctly
-    body = header + "\n\n" + (changes ? changes : "- (no user-visible changes)")
+    if (useChangelogModule) {
+      // Use generateChangelog for enhanced notes with grouping, full messages, and token removal
+      if (debug) echo "release: Using generateChangelog module for release notes"
+      
+      // Generate changelog to a temporary file
+      String tempChangelog = ".release-notes-${version}.md"
+      try {
+        generateChangelog([
+          version: version,
+          outputFile: tempChangelog,
+          title: '',  // No title, we'll add our own header
+          since: prevTag ?: '',
+          tagPattern: "${tagPattern}[0-9]*"
+        ])
+        
+        // Read the generated content (skip the version header, we'll add our own)
+        String changelogContent = readFile(file: tempChangelog).trim()
+        
+        // Extract just the content without the ## version line
+        def lines = changelogContent.split('\n')
+        def contentLines = []
+        boolean skipNext = false
+        for (int i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith('## ')) {
+            skipNext = true
+            continue
+          }
+          if (skipNext && lines[i].trim() == '') {
+            skipNext = false
+            continue
+          }
+          contentLines << lines[i]
+        }
+        
+        String header = prevTag ? "${notesHeader} (${prevTag} → ${tag})" : "${notesHeader}"
+        body = header + "\n\n" + (contentLines ? contentLines.join('\n').trim() : "- (no user-visible changes)")
+        
+        // Clean up temp file
+        sh "rm -f ${tempChangelog}"
+      } catch (Exception e) {
+        echo "release: Failed to generate changelog, falling back to simple commit list: ${e.message}"
+        // Fall back to simple commit list
+        String changes = commitRange ? sh(
+          script: "git log --no-merges --pretty='- %s (%h)' ${commitRange}",
+          returnStdout: true
+        ).trim() : ""
+        String header = prevTag ? "${notesHeader} (${prevTag} → ${tag})" : "${notesHeader}"
+        body = header + "\n\n" + (changes ? changes : "- (no user-visible changes)")
+      }
+    } else {
+      // Original simple commit list
+      String changes = commitRange ? sh(
+        script: "git log --no-merges --pretty='- %s (%h)' ${commitRange}",
+        returnStdout: true
+      ).trim() : ""
+      String header = prevTag ? "${notesHeader} (${prevTag} → ${tag})" : "${notesHeader}"
+      body = header + "\n\n" + (changes ? changes : "- (no user-visible changes)")
+    }
   }
 
   // If we craft a body, we cannot ALSO ask GitHub to auto-generate notes.
