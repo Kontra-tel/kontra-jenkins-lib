@@ -54,6 +54,7 @@ pipeline {
   environment {
     VERSION_FILE   = 'version.txt'
     CHANGELOG_FILE = 'CHANGELOG.md'
+    CHANGELOG_TXT  = 'CHANGELOG.txt'  // plain text changelog output
     // creds to read this repo when loading as a shared library
     GIT_READ_CREDS = 'Jenkins-Kontra'
   }
@@ -163,8 +164,7 @@ allprojects {
           def out = generateChangelog(
             outputFile: env.CHANGELOG_FILE,
             version   : env.BUILD_VERSION,
-            
-
+            plainOutput: env.CHANGELOG_TXT
           )
           echo "Changelog updated → ${out ?: 'no changes'}"
           archiveArtifacts artifacts: env.CHANGELOG_FILE, fingerprint: true
