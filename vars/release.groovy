@@ -207,7 +207,9 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
   try {
     if (ownerHint) return githubAppToken(credentialsId: credentialsId, owner: ownerHint)
     return githubAppToken(credentialsId: credentialsId)
-  } catch (Throwable ignore) {}
+  } catch (Throwable ignore) {
+    echo "release: GitHub App token failed, trying String credentials: ${ignore.message}"
+  }
   // Fallback to withCredentials for Secret Text (PAT)
   try {
     String token = null
@@ -215,7 +217,9 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
       token = env.GITHUB_TOKEN
     }
     return token
-  } catch (Throwable ignore) {}
+  } catch (Throwable ignore) {
+    echo "release: String credentials also failed: ${ignore.message}"
+  }
   return null
 }
 
@@ -225,31 +229,41 @@ private void pushTag(String tag, String credentialsId, String ownerHint, String 
     // Get the appropriate token for the credential type
     String token = resolveGithubToken(credentialsId, ownerHint)
     if (token) {
-      // Get current remote URL and temporarily modify it to include the token
+      if (debug) echo "release: using token authentication for git push"
+      
+      // Get current remote URL 
       String originalUrl = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-      try {
-        // Convert to HTTPS URL with token if not already
-        String authUrl = originalUrl
-        if (originalUrl.startsWith('git@github.com:')) {
-          String repoPath = originalUrl.substring('git@github.com:'.length()).replaceAll(/\.git$/, '')
-          authUrl = "https://x-access-token:${token}@github.com/${repoPath}.git"
-        } else if (originalUrl.startsWith('https://github.com/')) {
-          String repoPath = originalUrl.substring('https://github.com/'.length())
-          authUrl = "https://x-access-token:${token}@github.com/${repoPath}"
-        }
-        
-        // Temporarily set the remote URL and push
-        sh "git remote set-url origin '${authUrl}'"
+      
+      // Create authenticated URL
+      String repoPath = ""
+      if (originalUrl.startsWith('git@github.com:')) {
+        repoPath = originalUrl.substring('git@github.com:'.length()).replaceAll(/\.git$/, '')
+      } else if (originalUrl.startsWith('https://github.com/')) {
+        repoPath = originalUrl.substring('https://github.com/'.length()).replaceAll(/\.git$/, '')
+      } else {
+        // Unknown URL format, try direct push
+        if (debug) echo "release: unknown URL format, falling back to direct push"
         sh "git push origin ${tag}"
-      } finally {
-        // Restore original remote URL
-        sh "git remote set-url origin '${originalUrl}'"
+        return
+      }
+      
+      String authUrl = "https://x-access-token:${token}@github.com/${repoPath}.git"
+      if (debug) echo "release: using authenticated URL for push"
+      
+      try {
+        // Use the authenticated URL directly for this push
+        sh "git push '${authUrl}' ${tag}"
+      } catch (Exception e) {
+        if (debug) echo "release: authenticated push failed, trying fallback: ${e.message}"
+        // Fallback to direct push
+        sh "git push origin ${tag}"
       }
     } else {
-      // Fallback to direct push (might use SSH keys or other auth)
+      if (debug) echo "release: no token available, using default git authentication"
       sh "git push origin ${tag}"
     }
   } else {
+    if (debug) echo "release: no credentials configured, using default git authentication"
     sh "git push origin ${tag}"
   }
 }
