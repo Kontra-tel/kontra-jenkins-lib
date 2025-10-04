@@ -270,11 +270,3 @@ private String resolveGithubToken(String credentialsId, String ownerHint) {
   int rcPost = sh(script: "curl -sS -X POST ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases -d @gh-release.json >/dev/null", returnStatus: true)
   return (rcPost == 0)
 }
-
-// --- Asset helpers ---
-private String getReleaseIdByTag(String apiBase, String owner, String repo, String tag, String token) {
-  String hdrs = "-H 'Authorization: Bearer ${token}' -H 'Accept: application/vnd.github+json'"
-  String body = sh(script: "curl -sS ${hdrs} ${apiBase}/repos/${owner}/${repo}/releases/tags/${tag}", returnStdout: true).trim()
-  def m = (body =~ /\"id\"\s*:\s*(\d+)/)
-  return m.find() ? m.group(1) : ''
-}
