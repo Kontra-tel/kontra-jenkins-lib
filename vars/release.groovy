@@ -203,23 +203,58 @@ private Map detectOwnerRepo(String originUrl) {
 
 private String resolveGithubToken(String credentialsId, String ownerHint) {
   if (!credentialsId) return null
-  // Try GitHub App token (requires GitHub Branch Source plugin + installed App)
+  
+  // For GitHub App credentials, try multiple binding approaches
+  // GitHub Apps store tokens differently depending on the plugin version
+  
+  // Method 1: Try gitHubApp credential binding (GitHub App plugin)
   try {
-    if (ownerHint) return githubAppToken(credentialsId: credentialsId, owner: ownerHint)
-    return githubAppToken(credentialsId: credentialsId)
-  } catch (Throwable ignore) {
-    echo "release: GitHub App token failed, trying String credentials: ${ignore.message}"
+    String token = null
+    // GitHub App credentials can be bound as a map with 'token' key
+    withCredentials([[$class: 'org.jenkinsci.plugins.github_branch_source.GitHubAppCredentials', 
+                      credentialsId: credentialsId, 
+                      variable: 'GITHUB_APP']]) {
+      token = env.GITHUB_APP
+    }
+    if (token) {
+      echo "release: Successfully retrieved GitHub App token using GitHubAppCredentials binding"
+      return token
+    }
+  } catch (Throwable e1) {
+    // This is expected if GitHubAppCredentials binding is not available
   }
-  // Fallback to withCredentials for Secret Text (PAT)
+  
+  // Method 2: Try usernamePassword binding (GitHub App credentials often work this way)
+  try {
+    String token = null
+    withCredentials([usernamePassword(credentialsId: credentialsId, 
+                                       usernameVariable: 'GH_APP_ID', 
+                                       passwordVariable: 'GH_TOKEN')]) {
+      token = env.GH_TOKEN
+    }
+    if (token) {
+      echo "release: Successfully retrieved token using usernamePassword binding (GitHub App)"
+      return token
+    }
+  } catch (Throwable e2) {
+    echo "release: usernamePassword binding failed: ${e2.message}"
+  }
+  
+  // Method 3: Fallback to string binding for PAT (Personal Access Token)
   try {
     String token = null
     withCredentials([string(credentialsId: credentialsId, variable: 'GITHUB_TOKEN')]) {
       token = env.GITHUB_TOKEN
     }
-    return token
-  } catch (Throwable ignore) {
-    echo "release: String credentials also failed: ${ignore.message}"
+    if (token) {
+      echo "release: Successfully retrieved token using string binding (PAT)"
+      return token
+    }
+  } catch (Throwable e3) {
+    echo "release: String credentials binding failed: ${e3.message}"
   }
+  
+  echo "release: Failed to retrieve token using any method for credentialsId: ${credentialsId}"
   return null
 }
 
