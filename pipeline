@@ -167,7 +167,7 @@ allprojects {
             plainOutput: env.CHANGELOG_TXT
           )
           echo "Changelog updated → ${out ?: 'no changes'}"
-          archiveArtifacts artifacts: env.CHANGELOG_FILE, fingerprint: true
+          archiveArtifacts artifacts: "${env.CHANGELOG_FILE},${env.CHANGELOG_TXT}", fingerprint: true
         }
       }
     }
