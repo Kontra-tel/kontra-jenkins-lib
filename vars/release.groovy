@@ -4,8 +4,8 @@
 // Expects `version:` (string). Does NOT compute/bump versions.
 //
 // Tagging gates (independent of GH Release):
-//   - alwaysTag:true                      -> tag every time
-//   - tagOnRelease:true (default) & commit has '!release' OR forceRelease:true
+//   - alwaysTag:true                      -> tag every build
+//   - tagOnRelease:true (default) & commit has '!tag' OR forceRelease:true
 //   - onlyTagOnMain:true (default)        -> allow tagging only on releaseBranch
 //
 // GitHub Release will be created when ALL are true:
@@ -13,11 +13,16 @@
 //   - not explicitly suppressed by '!no-ghrelease' AND
 //   - any of:
 //       * cfg.createGithubRelease == true
-//       * commit message contains '!ghrelease'
+//       * commit message contains '!release' (or !ghrelease, !github-release)
 //       * cfg.forceGithubRelease == true  OR env.FORCE_GH_RELEASE == 'true'
 //
 // Additionally, if a GH Release is requested, this step ensures the tag exists
 // (respecting branch gate) and pushes it before creating/updating the release.
+//
+// Token Summary:
+//   !tag           -> Create and push git tag
+//   !release       -> Create GitHub Release (requires tag to exist on remote)
+//   !no-ghrelease  -> Suppress GitHub Release creation
 //
 // Returns: [tag, tagged, pushed, githubReleased, isRelease, ghReleaseRequested, branch]
 //
@@ -28,22 +33,21 @@ def call(Map cfg = [:]) {
 
   // Core config (provide safe defaults for all referenced symbols)
   final String  tagPrefix          = (cfg.tagPrefix ?: 'v') as String
-  final String  releaseToken       = (cfg.releaseToken ?: '!release') as String
   final boolean tagOnRelease       = (cfg.tagOnRelease == false) ? false : true
   final boolean forceRelease       = (cfg.forceRelease == true)
   final boolean onlyTagOnMain      = (cfg.onlyTagOnMain == false) ? false : true
   final String  mainBranch         = (cfg.releaseBranch ?: cfg.mainBranch ?: 'main') as String
   final boolean alwaysTag          = (cfg.alwaysTag == true)
 
-  // Tokens (support aliases for clarity)
-  // Tagging now triggered by '!tag' (primary), GitHub Release by '!release' (primary)
-  // Backward-compatible aliases remain supported.
+  // Tokens (simplified)
+  // Tagging triggered by '!tag' only
+  // GitHub Release triggered by '!release' (and aliases for compatibility)
   final List<String> releaseTokens     = (cfg.releaseTokens instanceof List ? cfg.releaseTokens : null) ?: ['!tag']
   final List<String> ghReleaseTokens   = (cfg.ghReleaseTokens instanceof List ? cfg.ghReleaseTokens : null) ?: ['!release', '!ghrelease', '!github-release']
   final List<String> ghReleaseNoTokens = (cfg.ghReleaseNoTokens instanceof List ? cfg.ghReleaseNoTokens : null) ?: ['!no-ghrelease', '!no-github-release']
-  final String       ghReleaseToken    = (cfg.ghReleaseToken ?: '!release') as String  // primary token is now !release
+  final String       ghReleaseToken    = (cfg.ghReleaseToken ?: '!release') as String  // primary token for GitHub Release
   final String       ghReleaseNoToken  = (cfg.noGhReleaseToken ?: '!no-ghrelease') as String
-  final boolean      forceGithubRelease= (cfg.forceGithubRelease == true) || (env.FORCE_GH_RELEASE == 'true')
+  final boolean      forceGithubRelease= (cfg.forceGithubRelease == true) || (cfg.createGithubRelease == true) || (env.FORCE_GH_RELEASE == 'true')
 
   // Lightweight probe / connectivity
   final boolean pushTags            = (cfg.pushTags == false) ? false : true
@@ -84,10 +88,13 @@ def call(Map cfg = [:]) {
 
   String tag       = "${tagPrefix}${version}"
 
-  // Decide if we should tag (only via tokens or force)
-  boolean tokenWantsTag = commitMsg.contains(releaseToken)
-  if (!tokenWantsTag) {
-    for (String t : releaseTokens) { if (commitMsg.contains(t)) { tokenWantsTag = true; break } }
+  // Decide if we should tag (via !tag token or alwaysTag)
+  boolean tokenWantsTag = false
+  for (String t : releaseTokens) { 
+    if (commitMsg.contains(t)) { 
+      tokenWantsTag = true
+      break 
+    }
   }
   boolean isRelease   = forceRelease || tokenWantsTag
   boolean allowedBr   = !onlyTagOnMain || (branch == mainBranch)
@@ -100,6 +107,15 @@ def call(Map cfg = [:]) {
   }
   boolean noGhByToken    = commitMsg.contains(ghReleaseNoToken) || ghReleaseNoTokens.any { commitMsg.contains(it) }
   boolean ghReleaseRequested = !noGhByToken && (wantsGhByToken || forceGithubRelease)
+
+  if (debug) {
+    echo "release: GitHub Release decision:"
+    echo "  - wantsGhByToken (commit has !release): ${wantsGhByToken}"
+    echo "  - forceGithubRelease (param/config): ${forceGithubRelease}"
+    echo "  - noGhByToken (commit has !no-ghrelease): ${noGhByToken}"
+    echo "  - ghReleaseRequested (final): ${ghReleaseRequested}"
+    echo "  - credentialsId: ${credentialsId}"
+  }
 
   boolean tagged = false
   boolean pushed = false
@@ -132,7 +148,12 @@ def call(Map cfg = [:]) {
   if (ghReleaseRequested && credentialsId) {
     // Require the tag to exist on the remote; do not let GH release creation implicitly create the tag
     if (!remoteTagExists(tag)) {
-      echo "release: GH release requested but tag ${tag} not found on origin; push the tag first (use !release)"
+      echo "release: GH release requested but tag ${tag} not found on origin; push the tag first (use !release or !tag)"
+      echo "release: This usually means the tag push failed. Check authentication and push logs above."
+      if (debug) {
+        echo "release: ghReleaseRequested=${ghReleaseRequested}, credentialsId=${credentialsId}"
+        echo "release: tagged=${tagged}, pushed=${pushed}"
+      }
       return [
         tag                : tag,
         tagged             : tagged,
@@ -143,6 +164,9 @@ def call(Map cfg = [:]) {
         branch             : branch
       ]
     }
+    
+    if (debug) echo "release: Tag ${tag} confirmed on remote, proceeding with GitHub Release creation"
+    
     ghRel = createOrUpdateRelease(
       tag, credentialsId, githubApi,
       releaseDraft, prerelease,

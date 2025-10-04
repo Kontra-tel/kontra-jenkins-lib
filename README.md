@@ -1,6 +1,36 @@
 # Kontra Jenkins Shared Library
 
-Reusable Jenkins Pipeline steps for versioning, releasing, environment files, changelog generation, and systemd deployment.
+Reusable Jenkins Pipeline steps for versioning, ## release
+
+Creates an annotated tag and pushes it, and optionally creates/updates a GitHub Release.
+
+**Tokens**
+
+- **`!tag`** → Create and push the git tag (subject to branch gates)
+- **`!release`** → Create GitHub Release (requires tag to exist on remote; will auto-tag if needed)
+- **`!no-ghrelease`** → Suppress GitHub Release creation even if configured
+- Aliases for `!release`: `!ghrelease`, `!github-release`
+
+**Tagging behavior**
+
+- `alwaysTag: true` → tag every build (ignores tokens)
+- `alwaysTag: false` → tag only when:
+  - Commit contains `!tag` OR
+  - `forceRelease: true` parameter is set
+- `onlyTagOnMain: true` (default) → restrict tagging to `mainBranch` (default: `'main'`)
+- `onlyTagOnMain: false` → allow tagging on any branch
+
+**GitHub Release behavior**
+
+- Created when ALL conditions are met:
+  - `credentialsId` is provided (GitHub App or PAT)
+  - NOT suppressed by `!no-ghrelease` token
+  - AND one of:
+    - `createGithubRelease: true` parameter
+    - Commit contains `!release` (or aliases)
+    - `forceGithubRelease: true` parameter
+
+**Git push auth**nment files, changelog generation, and systemd deployment.
 
 ## Provided Steps
 
