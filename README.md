@@ -6,7 +6,91 @@ Creates an annotated tag and pushes it, and optionally creates/updates a GitHub 
 
 **Tokens**
 
-- **`!tag`** → Create and push the git tag (subject to branch gates)
+- **`!tag`** → Create and push the git t- Protected tag rules may block creation; grant bypass or use an actor with bypass.
+- If App tokens don't push, use a PAT from a machine user with write access.
+
+## shouldBuild
+
+Determines if a build should proceed based on commit message tokens. Useful for token-driven workflows where builds should only run when specific tokens are present, avoiding unnecessary builds on every commit.
+
+**Parameters:**
+
+- `requiredTokens: ['!tag', '!release']` - List of tokens to check for (default: `['!tag', '!release']`)
+- `anyToken: false` - If `true`, match ANY token; if `false` (default), match ALL tokens
+- `force: false` - Force build regardless of tokens (can also use `env.FORCE_BUILD`)
+- `verbose: true` - Enable verbose logging (default: `true`)
+
+**Returns:** `true` if build should proceed, `false` otherwise
+
+**Usage (skip build if no tokens):**
+
+```groovy
+stage('Check') {
+  steps {
+    script {
+      if (!shouldBuild(requiredTokens: ['!tag', '!release'], anyToken: true)) {
+        currentBuild.result = 'NOT_BUILT'
+        error('No required tokens found. Build skipped.')
+      }
+    }
+  }
+}
+```
+
+**Usage (with parameters):**
+
+```groovy
+pipeline {
+  agent any
+  
+  parameters {
+    booleanParam(name: 'FORCE_BUILD', defaultValue: false, description: 'Force build regardless of tokens')
+  }
+  
+  stages {
+    stage('Check') {
+      steps {
+        script {
+          // Build only if commit has !release OR !tag
+          if (!shouldBuild(requiredTokens: ['!release', '!tag'], anyToken: true)) {
+            currentBuild.result = 'NOT_BUILT'
+            error('Build skipped - no release tokens in commit message')
+          }
+        }
+      }
+    }
+    
+    stage('Build') {
+      steps {
+        echo "Building..."
+      }
+    }
+  }
+}
+```
+
+**Example commit messages:**
+
+```bash
+# Will NOT build (no tokens)
+git commit -m "Fix typo in README"
+
+# WILL build (!release token present)
+git commit -m "Add new feature !minor !release"
+
+# WILL build (!tag token present)
+git commit -m "Bugfix !patch !tag"
+
+# Force build from Jenkins UI (set FORCE_BUILD=true parameter)
+```
+
+## generateChangelog
+
+Builds a small markdown section from recent commits.
+
+- Inputs:
+  - `outputFile: 'CHANGELOG.md'`, `copyTo` (optional second path), `title`, `version`
+  - Range selection: `since` (tag or ref); else uses Jenkins previous commit env; else nearest tag; else last 50 commitst to branch gates)
 - **`!release`** → Create GitHub Release (requires tag to exist on remote; will auto-tag if needed)
 - **`!no-ghrelease`** → Suppress GitHub Release creation even if configured
 - Aliases for `!release`: `!ghrelease`, `!github-release`
@@ -38,6 +122,7 @@ Creates an annotated tag and pushes it, and optionally creates/updates a GitHub 
 |------|---------|
 | `semver` | Compute the next semantic version (with forced bumps, hybrid tag/file baseline, skip-on-same-commit). Exports `env.BUILD_VERSION`. |
 | `release` | Create/push a git tag and optionally create/update a GitHub Release. |
+| `shouldBuild` | Determine if build should proceed based on commit message tokens (for selective triggering). |
 | `generateChangelog` | Generate or append a changelog section from recent commits. |
 | `writeEnvFile` | Write a sanitized .env-style file from key/value pairs (supports dryRun). |
 | `deploySystemd` | Deploy a service unit (generic; supports repo `launch.sh` or custom command; supports dryRun). |
@@ -49,7 +134,118 @@ Creates an annotated tag and pushes it, and optionally creates/updates a GitHub 
    - Default version: `main`
    - Retrieval method: Modern SCM → Git → URL to this repo
 
-2. In your Jenkinsfile:
+## Workflow Patterns
+
+### Token-Driven Releases (for non-CI/CD apps)
+
+For apps like posting services where you don't need continuous integration on every commit, use a **token-driven** workflow with the `shouldBuild` step:
+
+**Setup:**
+
+1. **Add `shouldBuild` check** as first stage to skip builds without tokens
+2. **Set `alwaysTag: false`** to require explicit `!tag` token
+3. **Set `defaultBump: 'none'`** in semver to require version bump tokens
+
+**Workflow:**
+
+```bash
+# Development: Make changes without triggering Jenkins
+git commit -m "Fix bug in posting logic"
+git push
+# → Jenkins runs but shouldBuild skips the build (NOT_BUILT)
+
+# Ready to release: Use tokens in commit message
+git commit -m "Add new feature !minor !tag !release"
+git push
+# → Jenkins runs and proceeds with full build + release
+# 1. Detect !minor → bump to 1.2.0
+# 2. Detect !tag → create and push git tag
+# 3. Detect !release → create GitHub Release
+```
+
+**Pipeline configuration:**
+
+```groovy
+@Library('kontra-jenkins-lib') _
+
+pipeline {
+  agent any
+  
+  parameters {
+    booleanParam(name: 'FORCE_BUILD', defaultValue: false, description: 'Force build regardless of tokens')
+    booleanParam(name: 'ALWAYS_TAG', defaultValue: false, ...)
+  }
+  
+  stages {
+    stage('Check') {
+      steps {
+        script {
+          // Skip build if no release tokens present
+          if (!shouldBuild(requiredTokens: ['!tag', '!release'], anyToken: true)) {
+            currentBuild.result = 'NOT_BUILT'
+            error('Build skipped - no release tokens in commit message')
+          }
+        }
+      }
+    }
+    
+    stage('Version') {
+      steps {
+        script {
+          semver(defaultBump: 'none')  // Requires !major, !minor, or !patch token
+        }
+      }
+    }
+    
+    stage('Build') {
+      steps {
+        echo "Building ${env.BUILD_VERSION}..."
+      }
+    }
+    
+    stage('Release') {
+      steps {
+        script {
+          release(
+            version: env.BUILD_VERSION,
+            alwaysTag: params.ALWAYS_TAG,     // false by default
+            credentialsId: 'github-creds'
+          )
+        }
+      }
+    }
+  }
+}
+```
+
+### CI/CD Pattern (build on every commit)
+
+For continuous integration, enable automatic builds and tagging:
+
+**Setup:**
+
+1. **Enable SCM polling** or webhooks in `triggers` block
+2. **Set `alwaysTag: true`** to tag every build
+3. **Set `defaultBump: 'patch'`** for automatic patch bumps
+
+**Pipeline configuration:**
+
+```groovy
+triggers {
+  pollSCM('H/5 * * * *')  // Poll every 5 minutes
+}
+
+parameters {
+  booleanParam(name: 'ALWAYS_TAG', defaultValue: true, ...)
+}
+
+// semver with defaultBump: 'patch' (default)
+// release with alwaysTag: true
+```
+
+## Usage Examples
+
+1. In your Jenkinsfile:
 
 ```groovy
 @Library('kontra-jenkins-lib') _
