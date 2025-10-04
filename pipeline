@@ -17,37 +17,36 @@ pipeline {
 
   parameters {
     // Semver controls (versioning only)
-    booleanParam(name: 'FORCE_MAJOR',          defaultValue: false, description: 'Force major version bump (!major)')
-    booleanParam(name: 'FORCE_MINOR',          defaultValue: false, description: 'Force minor version bump (!minor)')
-    booleanParam(name: 'FORCE_PATCH',          defaultValue: false, description: 'Force patch version bump (default)')
+    booleanParam(name: 'FORCE_MAJOR',          defaultValue: false, description: 'Force major version bump (overrides !major token)')
+    booleanParam(name: 'FORCE_MINOR',          defaultValue: false, description: 'Force minor version bump (overrides !minor token)')
+    booleanParam(name: 'FORCE_PATCH',          defaultValue: false, description: 'Force patch version bump')
     booleanParam(name: 'STRICT_TAG_BASELINE',  defaultValue: false, description: 'Ignore version.txt; baseline only from tags')
     booleanParam(name: 'CUMULATIVE_PATCH',     defaultValue: false, description: 'Patch += commits since last tag (when baseline is a tag)')
 
-    // Release controls (tagging / GitHub release)
-    booleanParam(name: 'FORCE_RELEASE',        defaultValue: false, description: 'Force tagging this build as a release (!release)')
-    // Auto-tag every version by default now
-    booleanParam(name: 'ALWAYS_TAG',           defaultValue: true,  description: 'Create a git tag for every bump (auto-enabled)')
-    booleanParam(name: 'ONLY_TAG_ON_MAIN',     defaultValue: false, description: 'Only tag on the main branch (disabled to tag all branches)')
-    string      (name: 'RELEASE_BRANCH',       defaultValue: 'main', description: 'Branch where tagging is allowed when ONLY_TAG_ON_MAIN=true')
+    // Tagging controls (git tag creation and pushing)
+    booleanParam(name: 'FORCE_RELEASE',        defaultValue: false, description: 'Force git tag creation (overrides !tag token)')
+    booleanParam(name: 'ALWAYS_TAG',           defaultValue: true,  description: 'Create git tag for every version bump (ignores tokens)')
+    booleanParam(name: 'ONLY_TAG_ON_MAIN',     defaultValue: false, description: 'Restrict tagging to main branch only')
+    string      (name: 'RELEASE_BRANCH',       defaultValue: 'main', description: 'Branch name for tagging when ONLY_TAG_ON_MAIN=true')
 
-    // GitHub integration (for release step)
-    booleanParam(name: 'CREATE_GH_RELEASE',     defaultValue: false,  description: 'Create/Update a GitHub Release for tagged versions')
-    booleanParam(name: 'GH_RELEASE_DRAFT',      defaultValue: false, description: 'Create releases as drafts')
-    booleanParam(name: 'GH_RELEASE_PRERELEASE', defaultValue: false, description: 'Mark releases as prerelease')
-    booleanParam(name: 'GH_GENERATE_NOTES',     defaultValue: false, description: 'Let GitHub auto-generate release notes (ignored if we supply notes body)')
-    string      (name: 'GH_OWNER',              defaultValue: 'Kontra-tel', description: 'GitHub org/user (helps GitHub App token inference)')
-    string      (name: 'GH_CREDENTIALS_ID',     defaultValue: 'Jenkins-Kontra', description: 'CredentialsId (GitHub App or PAT) for pushing tags/releases')
+    // GitHub Release controls (requires credentialsId)
+    booleanParam(name: 'CREATE_GH_RELEASE',     defaultValue: false,  description: 'Force GitHub Release creation (overrides !release token)')
+    booleanParam(name: 'GH_RELEASE_DRAFT',      defaultValue: false, description: 'Create GitHub Releases as drafts')
+    booleanParam(name: 'GH_RELEASE_PRERELEASE', defaultValue: false, description: 'Mark GitHub Releases as prerelease')
+    booleanParam(name: 'GH_GENERATE_NOTES',     defaultValue: false, description: 'Let GitHub auto-generate release notes')
+    string      (name: 'GH_OWNER',              defaultValue: 'Kontra-tel', description: 'GitHub organization/user name')
+    string      (name: 'GH_CREDENTIALS_ID',     defaultValue: 'Jenkins-Kontra', description: 'Jenkins credentials ID (GitHub App or PAT)')
 
-    // Release notes controls (used by vars/release.groovy)
-    booleanParam(name: 'NOTES_SINCE_LAST_TAG',   defaultValue: true,  description: 'Include notes since previous tag in release body')
-    booleanParam(name: 'NOTES_INCLUDE_MERGES',   defaultValue: false, description: 'Include merge commits in notes')
-    string      (name: 'NOTES_MAX_COMMITS',      defaultValue: '200', description: 'Max commits to scan for notes')
-    booleanParam(name: 'ADD_COMPARE_LINK',       defaultValue: true,  description: 'Add compare link to release notes')
-    booleanParam(name: 'FALLBACK_RELEASE_CREATES_TAG', defaultValue: true, description: 'If push & Git API fail, let Release API create tag')
+    // Release notes controls
+    booleanParam(name: 'NOTES_SINCE_LAST_TAG',   defaultValue: true,  description: 'Include commit notes since previous tag in release body')
+    booleanParam(name: 'NOTES_INCLUDE_MERGES',   defaultValue: false, description: 'Include merge commits in release notes')
+    string      (name: 'NOTES_MAX_COMMITS',      defaultValue: '200', description: 'Maximum commits to scan for release notes')
+    booleanParam(name: 'ADD_COMPARE_LINK',       defaultValue: true,  description: 'Add GitHub compare link to release notes')
+    booleanParam(name: 'FALLBACK_RELEASE_CREATES_TAG', defaultValue: true, description: 'Allow GitHub Release API to create tag if push fails')
 
     // Debug & git identity
-    booleanParam(name: 'DEBUG_RELEASE',        defaultValue: false, description: 'Verbose diagnostics for release push/token')
-    string      (name: 'GIT_USER_NAME',        defaultValue: 'Jenkins CI', description: 'Git user.name for tagging (fallback if repo lacks config)')
+    booleanParam(name: 'DEBUG_RELEASE',        defaultValue: false, description: 'Enable verbose logging for release/tag operations')
+    string      (name: 'GIT_USER_NAME',        defaultValue: 'Jenkins CI', description: 'Git user.name for tag commits')
     string      (name: 'GIT_USER_EMAIL',       defaultValue: 'jenkins@local', description: 'Git user.email for tagging (fallback)')
   }
 
