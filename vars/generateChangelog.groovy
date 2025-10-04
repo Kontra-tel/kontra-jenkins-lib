@@ -121,8 +121,10 @@ def call(Map cfg = [:]) {
                 for (int i = 1; i < lines.length; i++) {
                     String line = lines[i].trim()
                     if (line) {
-                        mdBlock.append("  - ").append(line).append('\n')
-                        plainBlock.append("    - ").append(line).append('\n')
+                        // Markdown: add dash prefix
+                        mdBlock.append("  ").append(line).append('\n')
+                        // Plain text: just indent
+                        plainBlock.append("      ").append(line).append('\n')
                     }
                 }
             }
@@ -135,13 +137,12 @@ def call(Map cfg = [:]) {
     }
     
     // Contributors section
-    mdBlock.append("---\n")
     mdBlock.append("**Contributors:** ")
     for (String a : authors) {
         mdBlock.append(a).append(', ')
     }
     mdBlock.delete(mdBlock.length() - 2, mdBlock.length()) // Remove trailing comma
-    mdBlock.append("\n===\n\n")
+    mdBlock.append("\n\n")
     
     plainBlock.append("-" * 80).append("\n")
     plainBlock.append("Contributors: ")
@@ -160,7 +161,8 @@ def call(Map cfg = [:]) {
 
     // 9) Write markdown changelog
     echo mdBlock.toString()
-    sh "printf '%s\\n' \"${mdBlock}\" >> '${outputFile}'"
+    String mdContent = existing + mdBlock.toString()
+    writeFile file: outputFile, text: mdContent
 
     // 10) Write plain text changelog if requested
     if (plainOutput) {
@@ -170,7 +172,8 @@ def call(Map cfg = [:]) {
         
         String plainExisting = readFile(file: plainOutput)
         if (!plainExisting.contains("VERSION: ${version}")) {
-            sh "printf '%s\\n' \"${plainBlock}\" >> '${plainOutput}'"
+            String plainContent = plainExisting + plainBlock.toString()
+            writeFile file: plainOutput, text: plainContent
             echo "Plain changelog written to: ${plainOutput}"
         }
     }
