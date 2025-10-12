@@ -100,6 +100,9 @@ def call(Map cfg = [:]) {
   String baselineSource = 'tag'
   String tagVer  = readTagVersion(tagPattern, tagMode)
   String fileVer = fileExists(versionFile) ? readFile(file: versionFile).trim() : '0.0.0'
+  // Defensive normalization to avoid any null/empty/non-semver values
+  tagVer  = sanitizeSemver(tagVer)
+  fileVer = sanitizeSemver(fileVer)
   String current
   if (strategy == 'file') {
     current = fileVer
@@ -111,6 +114,8 @@ def call(Map cfg = [:]) {
     current = maxSemver(tagVer ?: '0.0.0', fileVer ?: '0.0.0') // hybrid by default
     baselineSource = (current == (tagVer ?: '0.0.0')) ? 'tag' : 'file'
   }
+  // Final guard in case upstream produced something unexpected
+  if (!current) current = '0.0.0'
 
   // ---- Parse & bump ----
   List<String> parts = (current ?: '0.0.0').tokenize('.')
@@ -174,6 +179,12 @@ def call(Map cfg = [:]) {
 }
 
 // ---- helpers (CPS-safe) ----
+// Coerce null/blank/non-matching values to a safe default '0.0.0'
+private String sanitizeSemver(String v) {
+  if (!v) return '0.0.0'
+  def m = (v =~ /\b(\d+)\.(\d+)\.(\d+)\b/)
+  return m.find() ? m.group(0) : '0.0.0'
+}
 private String readTagVersion(String tagPattern, String tagMode) {
   String t
   if (tagMode == 'latest') {
