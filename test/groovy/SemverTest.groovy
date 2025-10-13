@@ -5,6 +5,10 @@ class SemverTest extends BaseLibTest {
 
   String commitMessage
   String commitSha
+  // Mocks for git interactions
+  String mockDescribeTagOut = ''           // output for `git describe --tags ...`
+  String mockTagListLatestOut = ''         // output for `git ... tag -l ... --sort=-v:refname | head -n1`
+  int mockRevListCount = 0                 // output for `git rev-list --count <tag>..HEAD`
 
   @Before
   void customSh() {
@@ -20,12 +24,15 @@ class SemverTest extends BaseLibTest {
       } else if (script.contains('git rev-parse --abbrev-ref HEAD')) {
         out = 'main\n'
       } else if (script.contains('git describe --tags')) {
-        // Simulate no existing tags
-        out = ''
+        // Nearest tag when requested
+        out = (mockDescribeTagOut ?: '')
       } else if (script.contains('git fetch')) {
         out = ''
       } else if (script.contains('git rev-list --count')) {
-        out = '0\n'
+        out = "${mockRevListCount}\n"
+      } else if (script.contains(' tag -l ')) {
+        // Latest tag selection path
+        out = (mockTagListLatestOut ?: '') + '\n'
       }
       if (m.returnStdout) return out
       if (m.returnStatus) return 0
@@ -109,5 +116,136 @@ class SemverTest extends BaseLibTest {
     def v = runSemver(defaultBump:'none')
     assert v.version == '0.0.1'
     assert v.bump == 'patch'
+  }
+
+  @Test
+  void returns_same_version_when_tag_strategy_no_tags_and_default_none() {
+    // Simulate an existing version.txt with 1.2.3
+    readFiles['version.txt'] = '1.2.3\n'
+    // No tokens in commit message and no tags present (as mocked in customSh)
+    commitMessage = 'chore: update pipeline'
+    commitSha = '8888888888888888888888888888888888888888'
+    def v = runSemver(strategy: 'tag', defaultBump: 'none')
+    assert v.baseVersion == '1.2.3'
+    assert v.version == '1.2.3'
+    assert v.bump == 'none'
+    assert v.baselineSource == 'file'
+  }
+
+  @Test
+  void strict_tag_baseline_no_tags_default_none() {
+    // No tags, no version.txt
+    mockDescribeTagOut = ''
+    commitMessage = 'chore: nothing'
+    commitSha = '9999999999999999999999999999999999999999'
+    def v = runSemver(strategy: 'tag', strictTagBaseline: true, defaultBump: 'none')
+    assert v.baseVersion == '0.0.0'
+    assert v.version == '0.0.0'
+    assert v.bump == 'none'
+    assert v.baselineSource == 'tag'
+  }
+
+  @Test
+  void strict_tag_baseline_no_tags_default_patch() {
+    mockDescribeTagOut = ''
+    commitMessage = 'chore: bump'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0'
+    def v = runSemver(strategy: 'tag', strictTagBaseline: true, defaultBump: 'patch')
+    assert v.baseVersion == '0.0.0'
+    assert v.version == '0.0.1'
+    assert v.bump == 'patch'
+    assert v.baselineSource == 'tag'
+  }
+
+  @Test
+  void strict_tag_baseline_uses_tag_when_present() {
+    mockDescribeTagOut = 'v1.2.3\n'
+    commitMessage = 'chore: no bump'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1'
+    def v = runSemver(strategy: 'tag', strictTagBaseline: true, defaultBump: 'none')
+    assert v.baseVersion == '1.2.3'
+    assert v.version == '1.2.3'
+    assert v.bump == 'none'
+    assert v.baselineSource == 'tag'
+  }
+
+  @Test
+  void tag_mode_latest_selects_latest_tag() {
+    mockTagListLatestOut = 'v2.0.0'
+    commitMessage = 'chore: default patch'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2'
+    def v = runSemver(strategy: 'tag', tagMode: 'latest')
+    assert v.baseVersion == '2.0.0'
+    assert v.version == '2.0.1'
+    assert v.bump == 'patch'
+    assert v.baselineSource == 'tag'
+  }
+
+  @Test
+  void cumulative_patch_adds_commits_since_tag() {
+    mockDescribeTagOut = 'v0.1.0\n'
+    mockRevListCount = 3
+    commitMessage = 'fix: small patch'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3'
+    def v = runSemver(strategy: 'tag', cumulativePatch: true)
+    assert v.baseVersion == '0.1.0'
+    // origPatch=0 then +3 commits => 0.1.3
+    assert v.version == '0.1.3'
+    assert v.bump == 'patch'
+    assert v.commitsSinceTag == 3
+    assert v.baselineSource == 'tag'
+  }
+
+  @Test
+  void file_strategy_bumps_from_version_txt() {
+    readFiles['version.txt'] = '1.2.3\n'
+    commitMessage = 'chore: routine'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4'
+    def v = runSemver(strategy: 'file')
+    assert v.baseVersion == '1.2.3'
+    assert v.version == '1.2.4'
+    assert v.bump == 'patch'
+    assert v.baselineSource == 'file'
+  }
+
+  @Test
+  void sanitize_noisy_file_version() {
+    readFiles['version.txt'] = 'version: 9.8.7\n'
+    commitMessage = 'chore: no bump'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5'
+    def v = runSemver(strategy: 'file', defaultBump: 'none')
+    assert v.baseVersion == '9.8.7'
+    assert v.version == '9.8.7'
+    assert v.bump == 'none'
+    assert v.baselineSource == 'file'
+  }
+
+  @Test
+  void sanitize_noisy_tag_version() {
+    mockDescribeTagOut = 'release-v3.4.5\n'
+    commitMessage = 'chore: no bump'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6'
+    def v = runSemver(strategy: 'tag', strictTagBaseline: true, defaultBump: 'none')
+    assert v.baseVersion == '3.4.5'
+    assert v.version == '3.4.5'
+    assert v.bump == 'none'
+    assert v.baselineSource == 'tag'
+  }
+
+  @Test
+  void cumulative_patch_does_not_apply_when_baseline_from_file() {
+    // file has newer version than tag -> baselineSource should be 'file'
+    readFiles['version.txt'] = '1.2.3\n'
+    mockDescribeTagOut = 'v1.2.0\n'
+    mockRevListCount = 5
+    commitMessage = 'fix: patch'
+    commitSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7'
+    def v = runSemver(strategy: 'tag', cumulativePatch: true)
+    assert v.baseVersion == '1.2.3'
+    assert v.baselineSource == 'file'
+    // Since baseline is file, cumulative patch must NOT apply
+    assert v.version == '1.2.4'
+    assert v.bump == 'patch'
+    assert v.commitsSinceTag == 0
   }
 }

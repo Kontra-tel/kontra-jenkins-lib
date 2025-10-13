@@ -89,9 +89,9 @@ def call(Map cfg = [:]) {
         cumulativePatch: cumulativePatch,
         commitMessage  : commitMsg,
         branch         : branch,
-  skipped        : true,
-  isRelease      : isRelease,
-  forcedBump     : forcedBump ?: ''
+        skipped        : true,
+        isRelease      : isRelease,
+        forcedBump     : forcedBump ?: ''
       ]
     }
   }
