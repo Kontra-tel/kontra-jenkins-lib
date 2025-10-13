@@ -11,33 +11,33 @@ def call(Map cfg = [:]) {
     def start       = (cfg.start == false) ? false : true
     def showStatus  = (cfg.showStatus == false) ? false : true
     
-    def runAsPrefix = runAsUser ? "sudo -u ${runAsUser} " : ''
+    // Always operate on user units without sudo. If runAsUser is provided, it's informational only.
     def ctl         = 'systemctl --user'
 
     echo "restartSystemd: Managing service '${service}'${runAsUser ? " as user '${runAsUser}'" : ''}"
 
     if (reload) {
-        sh "${runAsPrefix}${ctl} daemon-reload"
+        sh "${ctl} daemon-reload"
         echo "restartSystemd: Reloaded systemd daemon"
     }
 
     if (enable) {
-        sh "${runAsPrefix}${ctl} enable ${service} || true"
+        sh "${ctl} enable ${service} || true"
         echo "restartSystemd: Enabled service '${service}'"
     }
 
     if (stop) {
-        sh "${runAsPrefix}${ctl} stop ${service} || true"
+        sh "${ctl} stop ${service} || true"
         echo "restartSystemd: Stopped service '${service}'"
     }
 
     if (start) {
-        sh "${runAsPrefix}${ctl} start ${service}"
+        sh "${ctl} start ${service}"
         echo "restartSystemd: Started service '${service}'"
     }
 
     if (showStatus) {
-        sh "${runAsPrefix}${ctl} status --no-pager ${service} || true"
+        sh "${ctl} status --no-pager ${service} || true"
     }
 
     return [
