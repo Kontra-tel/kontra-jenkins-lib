@@ -33,7 +33,7 @@ def call(Map cfg = [:]) {
     // User units only - simplified configuration
     def homeDir      = runAsUser ? "/home/${runAsUser}" : env.HOME
     def unitPath     = cfg.unitPath ?: "${homeDir}/.config/systemd/user/${service}.service"
-    def runAsPrefix  = runAsUser ? "sudo -u ${runAsUser} " : ''
+    // Never use sudo; when runAsUser is specified, we only derive paths (e.g., homeDir) but do not switch user
 
     // Optionally deploy latest artifact
     String deployedJar = null
@@ -139,13 +139,9 @@ ${startCommand}
             } else {
                 def tmp = ".tmp.${service}.service"
                 writeFile file: tmp, text: unit
-                if (runAsUser) {
-                    sh "${runAsPrefix}mkdir -p '${homeDir}/.config/systemd/user'"
-                    sh "${runAsPrefix}install -m 644 '${tmp}' '${unitPath}'"
-                } else {
-                    sh "mkdir -p '${homeDir}/.config/systemd/user'"
-                    sh "install -m 644 '${tmp}' '${unitPath}'"
-                }
+                // Create user unit without sudo; assumes current user has required permissions
+                sh "mkdir -p '${homeDir}/.config/systemd/user'"
+                sh "install -m 644 '${tmp}' '${unitPath}'"
                 sh "rm -f '${tmp}'"
                 echo "deploySystemd: wrote unit -> ${unitPath}"
                 unitContent = unit

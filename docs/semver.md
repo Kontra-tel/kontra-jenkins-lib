@@ -288,17 +288,20 @@ pipeline {
         stage('Version') {
             steps {
                 script {
-                    env.SEMVER_RESULT = semver(
+                    def ver = semver(
                         writeFile: true,
                         defaultBump: 'patch'
                     )
+                    env.BUILD_VERSION = ver.version
                 }
             }
         }
         
         stage('Build') {
             steps {
-                sh './gradlew build -Pversion=${env.BUILD_VERSION}'
+                // Use Groovy interpolation or shell expansion, both shown below:
+                // sh "./gradlew build -Pversion=${env.BUILD_VERSION}"
+                sh './gradlew build -Pversion=$BUILD_VERSION'
             }
         }
         
@@ -353,7 +356,8 @@ The `.semver-state` file prevents double-bumping:
 - Can be disabled with `skipOnSameCommit: false`
 
 **Example:**
-```
+
+```text
 # Build 1 on commit abc123
 semver() → 1.2.4 (bumped from 1.2.3)
 
@@ -364,11 +368,13 @@ semver() → 1.2.4 (reused, no bump)
 ## Environment Variables
 
 ### Set by semver
+
 - `BUILD_VERSION` - Computed version string
 - `IS_RELEASE` - `'true'` if release, `'false'` otherwise
 - `COMMIT_MESSAGE` - Last commit message (cached)
 
 ### Read by semver
+
 - `FORCE_MAJOR` - Force major bump if `'true'`
 - `FORCE_MINOR` - Force minor bump if `'true'`
 - `FORCE_PATCH` - Force patch bump if `'true'`
@@ -477,6 +483,7 @@ pipeline {
 **Problem:** Version stays the same across builds
 
 **Solutions:**
+
 - Check for double-bump prevention (`.semver-state` file)
 - Verify bump tokens in commit message
 - Check `defaultBump` setting
@@ -487,6 +494,7 @@ pipeline {
 **Problem:** Version starts from wrong number
 
 **Solutions:**
+
 - Check git tags match `tagPattern`
 - Verify `version.txt` contains correct baseline
 - Use `strictTagBaseline` to force tag-only
@@ -497,6 +505,7 @@ pipeline {
 **Problem:** Version jumps by more than expected
 
 **Solutions:**
+
 - Check `cumulativePatch` setting
 - Verify commit count is correct
 - Review git history for unexpected commits
