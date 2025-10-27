@@ -42,4 +42,26 @@ class WriteEnvFileTest extends BaseLibTest {
     def installCmd = shCalls.find { it =~ /install -m 640 -o kaappi -g kaappi .* \/tmp\/app\.env/ }
     assert installCmd != null
   }
+
+  @Test
+  void writes_unquoted_values_when_configured() {
+    def step = loadStep('writeEnvFile')
+    def res = step.call(
+      dryRun: true,
+      path: '/tmp/plain.env',
+      quoteValues: false,
+      data: [FOO: 'bar', NUM: '123', MULTI: 'line1\nline2']
+    )
+    assert res.dryRun
+    assert res.path == '/tmp/plain.env'
+    // Lines should not include surrounding quotes for values
+    assert res.content.contains('FOO=bar')
+    assert res.content.contains('NUM=123')
+    // Newlines are still escaped as \n but not quoted
+    assert res.content.contains('MULTI=line1\\nline2')
+    // Ensure no accidental quotes on these keys' lines
+    assert !res.content.readLines().any { it =~ /^FOO=.*"/ }
+    assert !res.content.readLines().any { it =~ /^NUM=.*"/ }
+    assert !res.content.readLines().any { it =~ /^MULTI=.*"/ }
+  }
 }

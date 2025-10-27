@@ -62,6 +62,7 @@ pipeline {
 
 ### Formatting
 - `sortKeys` (Boolean) - Sort keys alphabetically (default: `true`)
+- `quoteValues` (Boolean) - Wrap values in double quotes and escape (default: `true`). Set to `false` to write plain values (suitable only for simple values without spaces or quotes).
 
 ### Testing
 - `dryRun` (Boolean) - Test mode, doesn't install file (default: `false`)
@@ -93,6 +94,29 @@ stage('Setup Environment') {
 HOST="0.0.0.0"
 LOG_LEVEL="info"
 PORT="8080"
+```
+
+### Unquoted Values (plain mode)
+
+Use this only if your consumer expects raw values without surrounding quotes and your values are simple (no spaces or quotes).
+
+```groovy
+writeEnvFile(
+    path: '/opt/app/.env',
+    quoteValues: false,
+    data: [
+        PORT: '8080',
+        DEBUG: 'true',
+        MULTI: 'line1\nline2'  // literal backslash-n in file
+    ]
+)
+```
+
+**Generated file (excerpt):**
+```bash
+DEBUG=true
+MULTI=line1\nline2
+PORT=8080
 ```
 
 ### Using Environment Variables
@@ -261,11 +285,13 @@ Keys are automatically sanitized to be valid environment variable names:
 
 Values are properly escaped for shell environments:
 
-- Wrapped in double quotes
-- Backslashes escaped: `\` → `\\`
-- Double quotes escaped: `"` → `\"`
-- Newlines folded: `\n` → `\\n`
+- By default, values are wrapped in double quotes
+- Backslashes escaped: `\\` → `\\\\`
+- Double quotes escaped: `\"` → `\\\"`
+- Actual newlines are folded to `\\n`
 - Null values converted to empty strings
+
+If `quoteValues: false`, values are written without surrounding quotes. Avoid this mode for values containing spaces, quotes, or special characters. Systemd's EnvironmentFile supports quoted values well; prefer quoted mode when in doubt.
 
 ## Return Value
 

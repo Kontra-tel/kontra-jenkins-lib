@@ -6,6 +6,7 @@ def call(Map cfg = [:]) {
     final String  path      = cfg.path as String
     final Map     data      = (cfg.data instanceof Map) ? (Map)cfg.data : [:]
     final boolean sortKeys  = (cfg.sortKeys != false)
+    final boolean quoteValues = (cfg.quoteValues != false)
     final String  mode      = (cfg.mode ?: '600') as String
     final String  owner     = cfg.owner ?: null
     final String  group     = cfg.group ?: null
@@ -50,8 +51,8 @@ def call(Map cfg = [:]) {
     def q = { String v ->
         if (v == null) { v = '' }
         // escape backslashes and double quotes; fold newlines
-        v = v.replace('\\', '\\\\').replace('\"', '\\\"').replace('\r\n', '\n').replace('\n', '\\n')
-        "\"${v}\""
+        v = v.replace('\\', '\\\\').replace('"', '\\"').replace('\r\n', '\n').replace('\n', '\\n')
+        quoteValues ? "\"${v}\"" : v
     }
     def valFor = { String k ->
         if (data.containsKey(k)) {
