@@ -1,17 +1,18 @@
 # deploySystemd
 
-Deploy services as systemd user units with automatic artifact deployment and script generation.
+Deploy services as systemd user units with automatic artifact deployment and script generation. Optimized for running on a Jenkins agent that already runs as the intended service user (no sudo required).
 
 ## Overview
 
-`deploySystemd` simplifies deploying applications as systemd user services. It handles artifact deployment, script generation, and unit file creation - all running under user systemd (no root/sudo required).
+`deploySystemd` simplifies deploying applications as systemd user services. It handles artifact deployment, script generation, and unit file creation — all running under user systemd (no root/sudo required). The recommended setup is to run your Jenkins agent as the same user that will own and run the service.
 
 **Key Features:**
+
 - User units only (secure, no sudo needed)
 - Automatic artifact deployment from build outputs
 - Launch script generation or use existing scripts
 - Java application support with JVM options
-- Central service user support
+- Clean defaults for Jenkins agents running as the service user
 - Dry-run mode for testing
 
 ## Basic Usage
@@ -20,14 +21,14 @@ Deploy services as systemd user units with automatic artifact deployment and scr
 @Library('kontra-jenkins-lib') _
 
 pipeline {
-    agent any
+    agent { label 'linux-agent-running-as-appuser' }
     stages {
         stage('Deploy') {
             steps {
                 deploySystemd(
                     service: 'my-app',
-                    artifactGlob: 'build/libs/*.jar',
-                    workingDir: '/opt/my-app'
+                    artifactGlob: 'build/libs/*.jar'
+                    // workingDir defaults to "$HOME/apps/<service>" for the agent user
                 )
             }
         }
@@ -38,15 +39,18 @@ pipeline {
 ## Parameters
 
 ### Required
+
 - `service` (String) - Service name (used for unit file and systemctl commands)
 
 ### Common Options
-- `workingDir` (String) - Working directory for the service (default: `/opt/<service>`)
+
+- `workingDir` (String) - Working directory for the service (default: `$HOME/apps/<service>`)
 - `description` (String) - Service description (default: `"Service <service>"`)
 - `envFile` (String) - Path to environment file (optional)
-- `runAsUser` (String) - Run as different user (e.g., `'kontra-service'`) - requires sudoers configuration
+- `runAsUser` (String) - Optional. Used only to derive home-based paths for unit and workingDir when you deploy on behalf of another user. No sudo/switching occurs in this step.
 
 ### Artifact Deployment
+
 - `artifactGlob` (String) - Glob pattern for artifacts (e.g., `'build/libs/*.jar'`) - deploys latest match
 - `targetDir` (String) - Where to install artifacts (default: `workingDir`)
 - `targetName` (String) - Installed artifact name (default: `"<service>.jar"`)
@@ -56,21 +60,25 @@ pipeline {
 Three ways to define what runs (in priority order):
 
 1. **Explicit Command**
+
    ```groovy
    execStart: "/usr/bin/java -jar /opt/app/app.jar"
    ```
 
 2. **Start Command** (generates launch script)
+
    ```groovy
    startCommand: "java -jar app.jar --port 8080"
    ```
 
 3. **Repo Launch Script** (copies existing script)
+
    ```groovy
    repoLaunchScript: 'launch.sh'  // Default - auto-detected if exists
    ```
 
 4. **Auto-synthesized** (for Java apps when no script provided)
+
    ```groovy
    javaBin: '/usr/bin/java'        // Default
    javaOpts: '-Xmx512m'           // JVM options
@@ -79,16 +87,19 @@ Three ways to define what runs (in priority order):
    ```
 
 ### Unit File Options
+
 - `installUnit` (Boolean) - Create/update unit file (default: `true`)
 - `overwriteUnit` (Boolean) - Overwrite existing unit (default: `true`)
 - `unitPath` (String) - Custom unit file path (default: `~/.config/systemd/user/<service>.service`)
 
 ### Service Behavior
+
 - `restart` (String) - Restart policy: `'always'` (default) or `'on-failure'`
 - `restartSec` (String) - Seconds between restarts (default: `'3'`)
 - `enable` (Boolean) - Enable service to start automatically (default: `true`)
 
 ### Testing
+
 - `dryRun` (Boolean) - Preview without making changes (default: `false`)
 
 ## Examples
@@ -99,7 +110,7 @@ Three ways to define what runs (in priority order):
 deploySystemd(
     service: 'my-api',
     artifactGlob: 'target/*.jar',
-    workingDir: '/opt/my-api',
+    // workingDir defaults to $HOME/apps/my-api (no sudo required)
     javaOpts: '-Xmx1g -Xms512m',
     appArgs: '--port 8080'
 )
@@ -111,7 +122,7 @@ deploySystemd(
 // Project has launch.sh in repo root
 deploySystemd(
     service: 'worker',
-    workingDir: '/opt/worker',
+    // workingDir defaults to $HOME/apps/worker
     repoLaunchScript: 'scripts/start.sh'
 )
 ```
@@ -121,7 +132,6 @@ deploySystemd(
 ```groovy
 deploySystemd(
     service: 'node-app',
-    workingDir: '/opt/node-app',
     startCommand: 'npm start'
 )
 ```
@@ -131,33 +141,28 @@ deploySystemd(
 ```groovy
 stage('Create Env') {
     writeEnvFile(
-        path: '/opt/app/.env',
+        path: "${env.HOME}/apps/app/.env",
         data: [PORT: '8080', DB_URL: 'jdbc:...']
     )
 }
 stage('Deploy') {
     deploySystemd(
         service: 'app',
-        workingDir: '/opt/app',
-        envFile: '/opt/app/.env',
+        envFile: "${env.HOME}/apps/app/.env",
         artifactGlob: 'build/libs/*.jar'
     )
 }
 ```
 
-### Central Service User
+### Jenkins agent as the service user (recommended)
 
-```groovy
-// All services run under 'kontra-service' user
-deploySystemd(
-    service: 'api',
-    runAsUser: 'kontra-service',
-    workingDir: '/home/kontra-service/apps/api',
-    artifactGlob: 'build/libs/*.jar'
-)
-```
+Run the Jenkins agent as the same user that owns the service. This avoids all sudo and permission complexity.
 
-**Prerequisites:** See [CENTRAL_SERVICE_USER.md](../docs/CENTRAL_SERVICE_USER.md) for setup.
+Prerequisites:
+
+- loginctl enable-linger \<agent-user\>
+- Ensure the agent user's home directory is present and writable
+- Optional: pre-create `$HOME/apps` if you prefer a fixed structure
 
 ### Dry Run
 
@@ -204,9 +209,8 @@ result.restartResult    // Map: result from restartSystemd call
    - Auto-synthesize Java command (if no script provided)
 
 3. **Unit File Creation** - Generate systemd unit file:
-   - `~/.config/systemd/user/<service>.service`
-   - Or `<runAsUser>/.config/systemd/user/` if central user specified
-   - Includes: WorkingDirectory, EnvironmentFile, ExecStart, Restart policy
+    - `$HOME/.config/systemd/user/<service>.service` (HOME is derived from agent user or `runAsUser` only for path derivation)
+    - Includes: WorkingDirectory, EnvironmentFile, ExecStart, Restart policy
 
 4. **Service Management** - Calls [restartSystemd](./restartSystemd.md):
    - daemon-reload
@@ -223,7 +227,7 @@ This module **only supports user units** for security and simplicity:
 - Isolated from system services
 - Safer for CI/CD deployments
 
-For 24/7 operation, enable **lingering**:
+For 24/7 operation, enable **lingering** for the agent user:
 ```bash
 sudo loginctl enable-linger <username>
 ```
@@ -261,16 +265,7 @@ systemctl --user list-units
 
 ### Permission Denied
 
-For central service user, ensure sudoers configured:
-```bash
-# Check sudoers config
-sudo cat /etc/sudoers.d/jenkins-service-deploy
-
-# Test sudo access
-sudo -u jenkins sudo -u kontra-service systemctl --user status
-```
-
-See [CENTRAL_SERVICE_USER.md](../docs/CENTRAL_SERVICE_USER.md) for setup details.
+If you see permission errors writing files or installing artifacts, ensure you are deploying under a writable path for the agent user (e.g., `$HOME/apps/<service>`). Do not use `/opt` unless that directory is owned by the agent user.
 
 ## Related
 

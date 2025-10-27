@@ -93,6 +93,7 @@ stage('Check') {
 ```
 
 **Tokens:**
+
 - `!tag` - Create git tag
 - `!release` - Create GitHub release
 - `!deploy` - Trigger deployment
@@ -198,6 +199,7 @@ For central service user deployments, see [CENTRAL_SERVICE_USER.md](docs/CENTRAL
 ## Documentation
 
 ### Step Documentation
+
 - [deploySystemd](docs/deploySystemd.md) - Service deployment
 - [restartSystemd](docs/restartSystemd.md) - Service management
 - [writeEnvFile](docs/writeEnvFile.md) - Environment files
@@ -208,8 +210,10 @@ For central service user deployments, see [CENTRAL_SERVICE_USER.md](docs/CENTRAL
 - [uploadReleaseAssets](docs/uploadReleaseAssets.md) - Release assets
 
 ### Setup Guides
+
 - [CENTRAL_SERVICE_USER.md](docs/CENTRAL_SERVICE_USER.md) - Central service user setup
 - [SYSTEMD_PERMISSIONS.md](docs/SYSTEMD_PERMISSIONS.md) - Permission configurations
+- [Agent setup](docs/agent-setup.md) - Run Jenkins agent as the service user (no sudo)
 
 ## Development
 
@@ -233,6 +237,7 @@ MIT
 ## Contributing
 
 Pull requests welcome! Please ensure:
+
 1. Tests pass (`gradle test`)
 2. Documentation included in `docs/`
 3. Examples provided
@@ -240,5 +245,5 @@ Pull requests welcome! Please ensure:
 
 ## Support
 
-- Issues: https://github.com/Kontra-tel/kontra-jenkins-lib/issues
-- Discussions: https://github.com/Kontra-tel/kontra-jenkins-lib/discussions
+- Issues: [https://github.com/Kontra-tel/kontra-jenkins-lib/issues](https://github.com/Kontra-tel/kontra-jenkins-lib/issues)
+- Discussions: [https://github.com/Kontra-tel/kontra-jenkins-lib/discussions](https://github.com/Kontra-tel/kontra-jenkins-lib/discussions)

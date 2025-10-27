@@ -6,13 +6,18 @@ def call(Map cfg = [:]) {
     def dryRun       = (cfg.dryRun == true)
     def service      = cfg.service as String
     def desc         = cfg.description ?: "Service ${service}"
-    def workingDir   = cfg.workingDir ?: "/opt/${service}"
     def envFile      = cfg.envFile    ?: null
     // If a repo-provided launch script exists, we will stage it and use it by default
     def repoLaunchScript = cfg.repoLaunchScript ?: 'launch.sh'
     // Optional: high-level start command → will be written to a launch script and used for ExecStart
     def startCommand = cfg.startCommand ?: null
     def launchScriptName = cfg.launchScriptName ?: 'launch.sh'
+    // runAsUser influences HOME-derived paths only; we never sudo/switch users in this step
+    def runAsUser    = cfg.runAsUser  ?: null
+    // Derive HOME for the effective service user
+    def homeDir      = runAsUser ? "/home/${runAsUser}" : env.HOME
+    // Default workingDir to a HOME-scoped location to avoid privileged paths (e.g., /opt)
+    def workingDir   = cfg.workingDir ?: "${homeDir}/apps/${service}"
     def launchScriptPath = cfg.launchScriptPath ?: "${workingDir}/${launchScriptName}"
     def execStartCfg = cfg.execStart  ?: null     // if provided, used as-is
     def jarPath      = cfg.jarPath    ?: null     // OR
@@ -22,16 +27,12 @@ def call(Map cfg = [:]) {
     def javaBin      = cfg.javaBin    ?: '/usr/bin/java'
     def javaOpts     = cfg.javaOpts   ?: (env.JAVA_OPTS ?: '')
     def appArgs      = cfg.appArgs    ?: ''
-    // Optional: Run systemd commands as a different user (e.g., 'kontra-service')
-    // This allows a central service user to own all deployed services
-    def runAsUser    = cfg.runAsUser  ?: null
     def restart      = cfg.restart    ?: 'always' // on-failure|always
     def restartSec   = cfg.restartSec ?: '3'
     def installUnit  = (cfg.installUnit == false) ? false : true
     def overwriteUnit = (cfg.overwriteUnit == false) ? false : true
     
     // User units only - simplified configuration
-    def homeDir      = runAsUser ? "/home/${runAsUser}" : env.HOME
     def unitPath     = cfg.unitPath ?: "${homeDir}/.config/systemd/user/${service}.service"
     // Never use sudo; when runAsUser is specified, we only derive paths (e.g., homeDir) but do not switch user
 
