@@ -73,9 +73,6 @@ def call(Map cfg = [:]) {
 
   // Lightweight probe / connectivity
   final boolean pushTags            = (cfg.pushTags == false) ? false : true
-  // When true, do not fail the build if tag push fails because the tag already exists remotely.
-  // This is useful for reruns of the same version.
-  final boolean ignoreExistingTagPushFailure = (cfg.ignoreExistingTagPushFailure == true)
   final String  credentialsId       = (cfg.credentialsId ?: null) as String
   final String  ownerHint           = (cfg.owner ?: null) as String
   final String  gitUserName         = (cfg.gitUserName ?: 'Jenkins CI') as String
@@ -170,8 +167,8 @@ def call(Map cfg = [:]) {
       } catch (Exception e) {
         String msg = e.message ?: ''
         boolean alreadyExists = msg.contains('already exists') || msg.contains('non-fast-forward')
-        if (ignoreExistingTagPushFailure && alreadyExists) {
-          echo "release: tag ${tag} already exists on remote; ignoring push failure due to ignoreExistingTagPushFailure=true"
+        if (alreadyExists) {
+          echo "release: WARNING: tag ${tag} already exists on remote; ignoring non-fast-forward push failure"
           pushed = false
         } else {
           throw e
