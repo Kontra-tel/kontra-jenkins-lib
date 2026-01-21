@@ -105,21 +105,25 @@ def call(Map cfg = [:]) {
             String h = e.hash ?: ''
             String shortH = e.shortHash ?: ''
             String msg = (e.message ?: '').trim()
-            String[] lines = msg.split('\n')
-            
+            // Find the first newline, if any
+            int firstNewline = msg.indexOf('\n')
+            String firstLine = firstNewline >= 0 ? msg.substring(0, firstNewline) : msg
+            String rest = firstNewline >= 0 ? msg.substring(firstNewline + 1) : ''
+
             // Markdown: First line with commit link
             String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
-            mdBlock.append("- **").append(lines[0]).append("**")
+            mdBlock.append("- **").append(firstLine).append("**")
                    .append(" (").append(link).append(")\n")
-            
+
             // Plain text: First line with short hash
-            plainBlock.append("  * ").append(lines[0])
+            plainBlock.append("  * ").append(firstLine)
                       .append(" [").append(shortH).append("]\n")
-            
+
             // Additional lines as sub-items (indented)
-            if (lines.length > 1) {
-                for (int i = 1; i < lines.length; i++) {
-                    String line = lines[i].trim()
+            if (rest) {
+                String[] lines = rest.split('\n')
+                for (String line : lines) {
+                    line = line.trim()
                     if (line) {
                         // Markdown: add dash prefix
                         mdBlock.append("  ").append(line).append('\n')
@@ -128,7 +132,7 @@ def call(Map cfg = [:]) {
                     }
                 }
             }
-            
+
             if (e.author) authors.add(e.author)
         }
         
