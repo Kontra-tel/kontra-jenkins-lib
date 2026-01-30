@@ -1,5 +1,7 @@
-// vars/generateChangelog.groovy
+import kontra.jenkins.lib.GenerateChangelogHelper
+
 def call(Map cfg = [:]) {
-    return kontra.jenkins.lib.GenerateChangelogHelper.call(cfg, this)
+    def helper = new GenerateChangelogHelper(this)
+    return helper.call(cfg)
 }
 

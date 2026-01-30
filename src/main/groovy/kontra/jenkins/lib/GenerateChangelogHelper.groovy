@@ -1,7 +1,14 @@
 package kontra.jenkins.lib
 
-class GenerateChangelogHelper {
-    static String call(Map cfg = [:], script) {
+
+class GenerateChangelogHelper implements Serializable {
+    def script
+
+    GenerateChangelogHelper(script) {
+        this.script = script
+    }
+
+    def call(Map cfg = [:]) {
         String outputFile  = (cfg.outputFile ?: 'CHANGELOG.md') as String
         String plainOutput = (cfg.plainOutput ?: null) as String  // Optional plain text output
         String appendTo    = (cfg.copyTo ?: null) as String
