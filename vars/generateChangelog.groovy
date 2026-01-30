@@ -114,13 +114,13 @@ def call(Map cfg = [:]) {
                 i++
             }
             // If the first line ends with an open bracket or parenthesis, join with the next line(s) until a closing bracket/parenthesis is found
-            if (firstLine.matches(".*([\[(]$)")) {
-                while (i < msgLines.length && !firstLine.matches(".*[\])}]$")) {
+            if (firstLine.endsWith("(") || firstLine.endsWith("[")) {
+                while (i < msgLines.length && !(firstLine.endsWith(")") || firstLine.endsWith("]") || firstLine.endsWith("}"))) {
                     firstLine += msgLines[i].trim()
                     i++
                 }
             }
-            String rest = msgLines.length > i ? msgLines[i..-1].join('\n') : ''
+            String rest = i < msgLines.length ? msgLines[i..(msgLines.length-1)].join('\n') : ''
 
             // Markdown: First line with commit link (hash always on same line)
             String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
