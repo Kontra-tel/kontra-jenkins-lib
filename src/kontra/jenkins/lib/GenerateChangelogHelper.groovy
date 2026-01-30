@@ -104,14 +104,15 @@ class GenerateChangelogHelper implements Serializable {
                 String msg = (e.message ?: '').trim()
                 String[] msgLines = msg.split('\n')
                 def joinResult = ChangelogUtils.joinFirstLineWithMarkdownLink(msgLines)
-                String firstLine = joinResult.firstLine
-                int i = joinResult.nextIndex
-                String rest = i < msgLines.length ? msgLines[i..(msgLines.length-1)].join('\n') : ''
-                String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
-                mdBlock.append("- **").append(firstLine).append("** ")
-                       .append("(").append(link).append(")\n")
-                plainBlock.append("  * ").append(firstLine)
-                          .append(" [").append(shortH).append("]\n")
+                  String firstLine = joinResult.firstLine.replaceAll(/[\r\n]+/, ' ').trim()
+                  int i = joinResult.nextIndex
+                  String rest = i < msgLines.length ? msgLines[i..(msgLines.length-1)].join('\n') : ''
+                  String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
+                  link = link.replaceAll(/[\r\n]+/, '')
+                  mdBlock.append("- **").append(firstLine).append("** ")
+                      .append("(").append(link).append(")\n")
+                  plainBlock.append("  * ").append(firstLine)
+                         .append(" [").append(shortH).append("]\n")
                 if (rest) {
                     String[] lines = rest.split('\n')
                     for (String line : lines) {
