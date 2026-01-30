@@ -105,13 +105,20 @@ def call(Map cfg = [:]) {
             String h = e.hash ?: ''
             String shortH = e.shortHash ?: ''
             String msg = (e.message ?: '').trim()
-            // Always use the first non-empty line as the main entry
+            // Always use the first non-empty line as the main entry, but join lines if the first line ends with an open bracket or parenthesis
             String[] msgLines = msg.split('\n')
             String firstLine = ''
             int i = 0
             while (i < msgLines.length && firstLine.trim() == '') {
                 firstLine = msgLines[i].trim()
                 i++
+            }
+            // If the first line ends with an open bracket or parenthesis, join with the next line(s) until a closing bracket/parenthesis is found
+            if (firstLine.matches(".*([\[(]$)")) {
+                while (i < msgLines.length && !firstLine.matches(".*[\])}]$")) {
+                    firstLine += msgLines[i].trim()
+                    i++
+                }
             }
             String rest = msgLines.length > i ? msgLines[i..-1].join('\n') : ''
 
