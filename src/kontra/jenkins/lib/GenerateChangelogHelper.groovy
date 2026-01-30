@@ -1,6 +1,5 @@
 package kontra.jenkins.lib
 
-
 class GenerateChangelogHelper implements Serializable {
     def script
 
