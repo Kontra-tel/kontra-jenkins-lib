@@ -13,8 +13,9 @@ def call(Map cfg = [:]) {
   String goals = (cfg.goals ?: cfg.args ?: 'verify') as String
 
   String mavenCmd   = (cfg.mavenCmd ?: env.KONTRA_MVN_CMD ?: 'mvn') as String
-  String settingsId = (cfg.settingsId ?: env.KONTRA_MVN_SETTINGS_ID ?: '') as String
-  String credsId    = (cfg.credsId ?: env.KONTRA_MVN_CREDS_ID ?: '') as String
+String settingsId = (cfg.settingsId ?: env.KONTRA_MVN_SETTINGS_ID ?: 'maven-settings-github-packages') as String
+String credsId    = (cfg.credsId    ?: env.KONTRA_MVN_CREDS_ID    ?: 'github-packages') as String
+
 
   String userVar  = (cfg.usernameVar ?: env.KONTRA_MVN_USER_VAR ?: 'GITHUB_PACKAGES_USER') as String
   String tokenVar = (cfg.passwordVar ?: env.KONTRA_MVN_TOKEN_VAR ?: 'GITHUB_PACKAGES_TOKEN') as String
