@@ -105,28 +105,33 @@ def call(Map cfg = [:]) {
             String h = e.hash ?: ''
             String shortH = e.shortHash ?: ''
             String msg = (e.message ?: '').trim()
-            // Find the first newline, if any
-            int firstNewline = msg.indexOf('\n')
-            String firstLine = firstNewline >= 0 ? msg.substring(0, firstNewline) : msg
-            String rest = firstNewline >= 0 ? msg.substring(firstNewline + 1) : ''
+            // Always use the first non-empty line as the main entry
+            String[] msgLines = msg.split('\n')
+            String firstLine = ''
+            int i = 0
+            while (i < msgLines.length && firstLine.trim() == '') {
+                firstLine = msgLines[i].trim()
+                i++
+            }
+            String rest = msgLines.length > i ? msgLines[i..-1].join('\n') : ''
 
-            // Markdown: First line with commit link
+            // Markdown: First line with commit link (hash always on same line)
             String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
-            mdBlock.append("- **").append(firstLine).append("**")
-                   .append(" (").append(link).append(")\n")
+            mdBlock.append("- **").append(firstLine).append("** ")
+                   .append("(").append(link).append(")\n")
 
-            // Plain text: First line with short hash
+            // Plain text: First line with short hash (hash always on same line)
             plainBlock.append("  * ").append(firstLine)
                       .append(" [").append(shortH).append("]\n")
 
-            // Additional lines as sub-items (indented)
+            // Additional lines as sub-items (indented, never with hash)
             if (rest) {
                 String[] lines = rest.split('\n')
                 for (String line : lines) {
                     line = line.trim()
                     if (line) {
                         // Markdown: add dash prefix
-                        mdBlock.append("  ").append(line).append('\n')
+                        mdBlock.append("    ").append(line).append('\n')
                         // Plain text: just indent
                         plainBlock.append("      ").append(line).append('\n')
                     }
