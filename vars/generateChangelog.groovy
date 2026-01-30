@@ -106,7 +106,8 @@ def call(Map cfg = [:]) {
             String shortH = e.shortHash ?: ''
             String msg = (e.message ?: '').trim()
             String[] msgLines = msg.split('\n')
-            def joinResult = kontra.jenkins.lib.ChangelogUtils.joinFirstLineWithMarkdownLink(msgLines)
+            def joinResult = this.getClass().classLoader.loadClass('kontra.jenkins.lib.ChangelogUtils')
+                .joinFirstLineWithMarkdownLink(msgLines)
             String firstLine = joinResult.firstLine
             int i = joinResult.nextIndex
             String rest = i < msgLines.length ? msgLines[i..(msgLines.length-1)].join('\n') : ''
