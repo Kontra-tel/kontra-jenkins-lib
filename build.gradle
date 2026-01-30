@@ -12,6 +12,7 @@ repositories {
 }
 
 dependencies {
+  implementation 'org.codehaus.groovy:groovy-all:3.0.21'
   testImplementation 'org.codehaus.groovy:groovy-all:3.0.21'
   testImplementation 'junit:junit:4.13.2'
   testImplementation('com.lesfurets:jenkins-pipeline-unit:1.26') {
