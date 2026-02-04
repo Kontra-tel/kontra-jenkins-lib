@@ -8,63 +8,54 @@ class GenerateChangelogHelper implements Serializable {
     }
 
     def call(Map cfg = [:]) {
-        String outputFile  = (cfg.outputFile ?: 'CHANGELOG.md') as String
-        String plainOutput = (cfg.plainOutput ?: null) as String  // Optional plain text output
-        String appendTo    = (cfg.copyTo ?: null) as String
-        String resetToken  = (cfg.resetToken ?: '!resetLog') as String
-        String title       = (cfg.title ?: '# Changelog') as String
-        String version     = (cfg.version ?: (script.env.BUILD_VERSION ?: 'Unversioned')) as String
-        String tagPattern  = (cfg.tagPattern ?: 'v[0-9]*') as String
-        Integer maxCommits = (cfg.maxCommits ?: 0) as Integer // 0 = no limit
+        // Read config with defaults
+        def outputFile  = cfg.outputFile ?: 'CHANGELOG.md'
+        def plainOutput = cfg.plainOutput ?: null
+        def appendTo    = cfg.copyTo ?: null
+        def resetToken  = cfg.resetToken ?: '!resetLog'
+        def title       = cfg.title ?: '# Changelog'
+        def version     = cfg.version ?: (script.env.BUILD_VERSION ?: 'Unversioned')
+        def tagPattern  = cfg.tagPattern ?: 'v[0-9]*'
+        def maxCommits  = cfg.maxCommits ?: 0
 
-        // 1) Decide the log range
-        String base = (cfg.since ?: '') as String
-        if (!base?.trim()) {
-            base = script.env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: script.env.GIT_PREVIOUS_COMMIT ?: ''
-        }
-        if (!base?.trim()) {
-            base = script.sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true",
-                      returnStdout: true).trim()
-        }
-        String range = base?.trim() ? "${base}..HEAD" : "HEAD~50..HEAD"
+        // TEST HOOK: allow direct commit injection for tests
+        def commits = cfg.commits
+        if (commits == null) {
+            // 1) Decide the log range
+            def base = cfg.since ?: ''
+            if (!base?.trim()) base = script.env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: script.env.GIT_PREVIOUS_COMMIT ?: ''
+            if (!base?.trim()) base = script.sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true", returnStdout: true).trim()
+            def range = base?.trim() ? "${base}..HEAD" : "HEAD~50..HEAD"
 
-        // 2) Pull commits with FULL message body
-        String fmt = "%H%x1f%an%x1f%B%x1e"
-        String limit = maxCommits > 0 ? "--max-count=${maxCommits}" : ""
-        String raw = script.sh(
-            script: "git log --no-merges ${limit} --format='${fmt}' ${range}",
-            returnStdout: true
-        ).trim()
+            // 2) Pull commits with FULL message body
+            def fmt = "%H%x1f%an%x1f%B%x1e"
+            def limit = maxCommits > 0 ? "--max-count=${maxCommits}" : ""
+            def raw = script.sh(script: "git log --no-merges ${limit} --format='${fmt}' ${range}", returnStdout: true).trim()
+            if (!raw) {
+                script.echo "No change entries detected for range: ${range}"
+                return outputFile
+            }
 
-        if (!raw) {
-            script.echo "No change entries detected for range: ${range}"
-            return outputFile
-        }
-
-        // 3) Parse commits and clean messages
-        List<Map> commits = []
-        for (String rec : raw.split('\u001e')) {
-            if (!rec) continue
-            String[] parts = rec.split('\u001f', 3)
-            if (parts.length >= 3) {
-                String message = cleanCommitMessage(parts[2])
-                if (message) {
-                    commits.add([
-                        hash: parts[0],
-                        shortHash: parts[0].take(7),
-                        author: parts[1],
-                        message: message
-                    ])
+            // 3) Parse commits and clean messages
+            commits = []
+            raw.split('\u001e').each { rec ->
+                if (!rec) return
+                def parts = rec.split('\u001f', 3)
+                if (parts.length >= 3) {
+                    def message = cleanCommitMessage(parts[2])
+                    if (message) {
+                        commits << [hash: parts[0], shortHash: parts[0].take(7), author: parts[1], message: message]
+                    }
                 }
             }
-        }
-        if (commits.isEmpty()) {
-            script.echo "No change entries after parsing for range: ${range}"
-            return outputFile
+            if (!commits) {
+                script.echo "No change entries after parsing for range: ${range}"
+                return outputFile
+            }
         }
 
         // 4) Group commits by type
-        Map<String, List<Map>> grouped = groupCommitsByType(commits)
+        def grouped = groupCommitsByType(commits)
 
         // 5) Header/file init
         if (!script.fileExists(outputFile) || (script.env.COMMIT_MESSAGE ?: '').contains(resetToken)) {
@@ -72,17 +63,23 @@ class GenerateChangelogHelper implements Serializable {
         }
 
         // 6) Repo URL for links
-        String repoUrl = script.env.GIT_URL?.trim()
-        if (!repoUrl) {
-            repoUrl = script.sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
-        }
+        def repoUrl = script.env.GIT_URL?.trim() ?: script.sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
         if (repoUrl?.endsWith('.git')) repoUrl = repoUrl[0..-5]
 
         // 7) Compose markdown and plain text blocks
-        String timestamp = new Date().format('yyyy-MM-dd HH:mm', java.util.TimeZone.getTimeZone('UTC'))
-        StringBuilder mdBlock = new StringBuilder()
-        StringBuilder plainBlock = new StringBuilder()
-        LinkedHashSet<String> authors = new LinkedHashSet<>()
+        // Use java.time for Java 21+ compatibility
+        def timestamp
+        try {
+            def now = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC)
+            def fmt = java.time.format.DateTimeFormatter.ofPattern('yyyy-MM-dd HH:mm')
+            timestamp = now.format(fmt)
+        } catch (Throwable t) {
+            // Fallback for older Groovy/Java
+            timestamp = new Date().format('yyyy-MM-dd HH:mm', java.util.TimeZone.getTimeZone('UTC'))
+        }
+        def mdBlock = new StringBuilder()
+        def plainBlock = new StringBuilder()
+        def authors = new LinkedHashSet<String>()
 
         mdBlock.append("\n---\n\n")
         mdBlock.append("## ").append(version).append("\n\n")
@@ -92,30 +89,27 @@ class GenerateChangelogHelper implements Serializable {
         plainBlock.append("Released: ").append(timestamp).append(" UTC\n")
         plainBlock.append("=" * 80).append("\n\n")
 
-        for (String type : ['Features', 'Bug Fixes', 'Documentation', 'Performance', 'Refactoring', 'Other']) {
-            List<Map> typeCommits = grouped[type]
-            if (!typeCommits || typeCommits.isEmpty()) continue
+        ['Features', 'Bug Fixes', 'Documentation', 'Performance', 'Refactoring', 'Other'].each { type ->
+            def typeCommits = grouped[type]
+            if (!typeCommits) return
             mdBlock.append("### ").append(type).append("\n\n")
             plainBlock.append(type.toUpperCase()).append("\n")
             plainBlock.append("-" * type.length()).append("\n")
-            for (Map e : typeCommits) {
-                String h = e.hash ?: ''
-                String shortH = e.shortHash ?: ''
-                String msg = (e.message ?: '').trim()
-                String[] msgLines = msg.split('\n')
+            typeCommits.each { e ->
+                def h = e.hash ?: ''
+                def shortH = e.shortHash ?: ''
+                def msg = (e.message ?: '').trim()
+                def msgLines = msg.split('\n')
                 def joinResult = ChangelogUtils.joinFirstLineWithMarkdownLink(msgLines)
-                  String firstLine = joinResult.firstLine.replaceAll(/[\r\n]+/, ' ').trim()
-                  int i = joinResult.nextIndex
-                  String rest = i < msgLines.length ? msgLines[i..(msgLines.length-1)].join('\n') : ''
-                  String link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
-                  link = link.replaceAll(/[\r\n]+/, '')
-                  mdBlock.append("- **").append(firstLine).append("** ")
-                      .append("(").append(link).append(")\n")
-                  plainBlock.append("  * ").append(firstLine)
-                         .append(" [").append(shortH).append("]\n")
+                def firstLine = joinResult.firstLine.replaceAll(/[\r\n]+/, ' ').trim()
+                def i = joinResult.nextIndex
+                def rest = i < msgLines.length ? msgLines[i..-1].join('\n') : ''
+                def link = repoUrl ? "[${shortH}](${repoUrl}/commit/${h})" : shortH
+                link = link.replaceAll(/[\r\n]+/, '')
+                mdBlock.append("- **").append(firstLine).append("** (").append(link).append(")\n")
+                plainBlock.append("  * ").append(firstLine).append(" [").append(shortH).append("]\n")
                 if (rest) {
-                    String[] lines = rest.split('\n')
-                    for (String line : lines) {
+                    rest.split('\n').each { line ->
                         line = line.trim()
                         if (line) {
                             mdBlock.append("    ").append(line).append('\n')
@@ -123,40 +117,36 @@ class GenerateChangelogHelper implements Serializable {
                         }
                     }
                 }
-                if (e.author) authors.add(e.author)
+                if (e.author) authors << e.author
             }
             mdBlock.append("\n")
             plainBlock.append("\n")
         }
         mdBlock.append("**Contributors:** ")
-        for (String a : authors) {
-            mdBlock.append(a).append(', ')
-        }
+        authors.each { a -> mdBlock.append(a).append(', ') }
         if (authors) mdBlock.delete(mdBlock.length() - 2, mdBlock.length())
         mdBlock.append("\n\n")
         plainBlock.append("-" * 80).append("\n")
         plainBlock.append("Contributors: ")
-        for (String a : authors) {
-            plainBlock.append(a).append(', ')
-        }
+        authors.each { a -> plainBlock.append(a).append(', ') }
         if (authors) plainBlock.delete(plainBlock.length() - 2, plainBlock.length())
         plainBlock.append("\n").append("=" * 80).append("\n\n")
 
-        String existing = script.readFile(file: outputFile)
+        def existing = script.readFile(file: outputFile)
         if (existing.contains("## ${version}")) {
             script.echo "Changelog: version ${version} already present, skipping append"
             return outputFile
         }
         script.echo mdBlock.toString()
-        String mdContent = existing + mdBlock.toString()
+        def mdContent = existing + mdBlock.toString()
         script.writeFile file: outputFile, text: mdContent
         if (plainOutput) {
             if (!script.fileExists(plainOutput) || (script.env.COMMIT_MESSAGE ?: '').contains(resetToken)) {
                 script.writeFile file: plainOutput, text: "CHANGELOG\n"
             }
-            String plainExisting = script.readFile(file: plainOutput)
+            def plainExisting = script.readFile(file: plainOutput)
             if (!plainExisting.contains("VERSION: ${version}")) {
-                String plainContent = plainExisting + plainBlock.toString()
+                def plainContent = plainExisting + plainBlock.toString()
                 script.writeFile file: plainOutput, text: plainContent
                 script.echo "Plain changelog written to: ${plainOutput}"
             }
