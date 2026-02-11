@@ -179,13 +179,17 @@ class GenerateChangelogHelper implements Serializable {
 
     static String cleanCommitMessage(String msg) {
         if (!msg) return ''
-        String cleaned = msg.replaceAll(/(?i)!release/, '')
-                            .replaceAll(/(?i)!tag/, '')
-                            .replaceAll(/(?i)!deploy/, '')
-                            .replaceAll(/(?i)!major/, '')
-                            .replaceAll(/(?i)!minor/, '')
-                            .replaceAll(/(?i)!patch/, '')
-                            .replaceAll(/(?i)!resetLog/, '')
+        // Remove control tokens (e.g. !deploy, !patch) only when they appear as
+        // standalone markers in the text, not when embedded in URLs or other
+        // markdown where the leading character is typically '/' or '['.
+        String cleaned = msg
+                .replaceAll(/(?i)(?<![A-Za-z0-9\/] )!release(?![A-Za-z0-9\/])/, '')
+                .replaceAll(/(?i)(?<![A-Za-z0-9\/] )!tag(?![A-Za-z0-9\/])/, '')
+                .replaceAll(/(?i)(?<![A-Za-z0-9\/] )!deploy(?![A-Za-z0-9\/])/, '')
+                .replaceAll(/(?i)(?<![A-Za-z0-9\/] )!major(?![A-Za-z0-9\/])/, '')
+                .replaceAll(/(?<![A-Za-z0-9\/] )!minor(?![A-Za-z0-9\/])/, '')
+                .replaceAll(/(?<![A-Za-z0-9\/] )!patch(?![A-Za-z0-9\/])/, '')
+                .replaceAll(/(?<![A-Za-z0-9\/] )!resetLog(?![A-Za-z0-9\/])/, '')
         cleaned = cleaned.replaceAll(/[ ]+/, ' ')
                         .replaceAll(/\n\n+/, '\n\n')
                         .trim()
