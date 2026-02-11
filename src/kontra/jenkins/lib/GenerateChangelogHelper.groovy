@@ -25,12 +25,32 @@ class GenerateChangelogHelper implements Serializable {
             def base = cfg.since ?: ''
             if (!base?.trim()) base = script.env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: script.env.GIT_PREVIOUS_COMMIT ?: ''
             if (!base?.trim()) base = script.sh(script: "git describe --tags --abbrev=0 --match '${tagPattern}' 2>/dev/null || true", returnStdout: true).trim()
-            def range = base?.trim() ? "${base}..HEAD" : "HEAD~50..HEAD"
+
+            String range
+            if (base?.trim()) {
+                range = "${base}..HEAD"
+            } else {
+                // Fresh or very small repositories may not support HEAD~50; clamp by commit count
+                def countStr = script.sh(script: "git rev-list --count HEAD 2>/dev/null || echo 0", returnStdout: true).trim()
+                int commitCount = 0
+                try {
+                    commitCount = Integer.parseInt(countStr)
+                } catch (Throwable ignored) {
+                    commitCount = 0
+                }
+                if (commitCount > 1) {
+                    int offset = Math.min(commitCount - 1, 50)
+                    range = "HEAD~${offset}..HEAD"
+                } else {
+                    // Single-commit or unknown history; just use HEAD
+                    range = "HEAD"
+                }
+            }
 
             // 2) Pull commits with FULL message body
             def fmt = "%H%x1f%an%x1f%B%x1e"
             def limit = maxCommits > 0 ? "--max-count=${maxCommits}" : ""
-            def raw = script.sh(script: "git log --no-merges ${limit} --format='${fmt}' ${range}", returnStdout: true).trim()
+            def raw = script.sh(script: "git log --no-merges ${limit} --format='${fmt}' ${range} || true", returnStdout: true).trim()
             if (!raw) {
                 script.echo "No change entries detected for range: ${range}"
                 return outputFile
